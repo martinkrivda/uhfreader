@@ -1,54 +1,63 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.ComponentModel;
 using System.Data;
 using System.Drawing;
-using System.Linq;
-using System.Text;
-using System.Windows.Forms;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Windows.Forms;
+using CustomControl;
 using MySql.Data.MySqlClient;
+using Reader;
 
 namespace UHFDemo
 {
     public partial class R2000UartDemo : Form
     {
-        private Reader.ReaderMethod reader;
+        //Record quick poll antenna parameter.
+        private readonly byte[] m_btAryData = new byte[10];
+        private readonly InventoryBuffer m_curInventoryBuffer = new InventoryBuffer();
+        private readonly OperateTagBuffer m_curOperateTagBuffer = new OperateTagBuffer();
+        private readonly OperateTagISO18000Buffer m_curOperateTagISO18000Buffer = new OperateTagISO18000Buffer();
 
-        private ReaderSetting m_curSetting = new ReaderSetting();
-        private InventoryBuffer m_curInventoryBuffer = new InventoryBuffer();
-        private OperateTagBuffer m_curOperateTagBuffer = new OperateTagBuffer();
-        private OperateTagISO18000Buffer m_curOperateTagISO18000Buffer = new OperateTagISO18000Buffer();
+        private readonly ReaderSetting m_curSetting = new ReaderSetting();
+
+        //Frequency of list updating.
+        private readonly int m_nRealRate = 20;
+
+        //ISO18000 tag continuously inventory mark.
+        private bool m_bContinue;
+
+        //Whether display the serial monitoring data.
+        private bool m_bDisplayLog;
 
         //Before inventory, you need to set working antenna to identify whether the inventory operation is executing.
-        private bool m_bInventory = false;
+        private bool m_bInventory;
+
+        //Real time inventory locking operation.
+        private bool m_bLockTab;
+
         //Identify whether reckon the command execution time, and the current inventory command needs to reckon time.
         private bool m_bReckonTime = false;
-        //Real time inventory locking operation.
-        private bool m_bLockTab = false;
-        //ISO18000 tag continuously inventory mark.
-        private bool m_bContinue = false;
-        //Whether display the serial monitoring data.
-        private bool m_bDisplayLog = false;
-        //Record the number of ISO18000 tag written loop time.
-        private int m_nLoopTimes = 0;
-        //Record the number of ISO18000 tag's written characters.
-        private int m_nBytes = 0;
-        //Record the number of ISO18000 tag have been written loop time.
-        private int m_nLoopedTimes = 0;
-        //Real time inventory times.
-        private int m_nTotal = 0;
-        //Frequency of list updating.
-        private int m_nRealRate = 20;
-        //Record quick poll antenna parameter.
-        private byte[] m_btAryData=new byte[10];
-        //Record the total number of quick poll times.
-        private int m_nSwitchTotal = 0;
-        private int m_nSwitchTime = 0;
 
-        private int m_nReceiveFlag = 0;
+        //Record the number of ISO18000 tag's written characters.
+        private int m_nBytes;
+
+        //Record the number of ISO18000 tag have been written loop time.
+        private int m_nLoopedTimes;
+
+        //Record the number of ISO18000 tag written loop time.
+        private int m_nLoopTimes;
+
+        private int m_nReceiveFlag;
+
+        private int m_nSwitchTime;
+
+        //Record the total number of quick poll times.
+        private int m_nSwitchTotal;
+
+        //Real time inventory times.
+        private int m_nTotal;
+        private ReaderMethod reader;
 
         public R2000UartDemo()
         {
@@ -58,7 +67,7 @@ namespace UHFDemo
         private void R2000UartDemo_Load(object sender, EventArgs e)
         {
             //The real example of accessing reader initialization.
-            reader = new Reader.ReaderMethod();
+            reader = new ReaderMethod();
 
             //Callback function
             reader.AnalyCallback = AnalyData;
@@ -78,52 +87,49 @@ namespace UHFDemo
             txtTcpPort.Text = "4001";
 
 
-            
             rdbInventoryRealTag_CheckedChanged(sender, e);
             cmbSession.SelectedIndex = 0;
             cmbTarget.SelectedIndex = 0;
             cmbReturnLossFreq.SelectedIndex = 33;
-            if (cbUserDefineFreq.Checked == true)
+            if (cbUserDefineFreq.Checked)
             {
                 groupBox21.Enabled = false;
                 groupBox23.Enabled = true;
-
             }
             else
             {
                 groupBox21.Enabled = true;
                 groupBox23.Enabled = false;
-            };
+            }
+
+            ;
         }
 
         private void ReceiveData(byte[] btAryReceiveData)
         {
             if (m_bDisplayLog)
             {
-                string strLog = CCommondMethod.ByteArrayToString(btAryReceiveData, 0, btAryReceiveData.Length);
+                var strLog = CCommondMethod.ByteArrayToString(btAryReceiveData, 0, btAryReceiveData.Length);
 
                 WriteLog(lrtxtDataTran, strLog, 1);
-            }            
+            }
         }
 
         private void SendData(byte[] btArySendData)
         {
             if (m_bDisplayLog)
             {
-                string strLog = CCommondMethod.ByteArrayToString(btArySendData, 0, btArySendData.Length);
+                var strLog = CCommondMethod.ByteArrayToString(btArySendData, 0, btArySendData.Length);
 
                 WriteLog(lrtxtDataTran, strLog, 0);
-            }            
+            }
         }
 
-        private void AnalyData(Reader.MessageTran msgTran)
+        private void AnalyData(MessageTran msgTran)
         {
             m_nReceiveFlag = 0;
-            if (msgTran.PacketType != 0xA0)
-            {
-                return;
-            }
-            switch(msgTran.Cmd)
+            if (msgTran.PacketType != 0xA0) return;
+            switch (msgTran.Cmd)
             {
                 case 0x69:
                     ProcessSetProfile(msgTran);
@@ -191,7 +197,7 @@ namespace UHFDemo
                 case 0x68:
                     ProcessGetReaderIdentifier(msgTran);
                     break;
-                              
+
                 case 0x80:
                     ProcessInventory(msgTran);
                     break;
@@ -254,360 +260,321 @@ namespace UHFDemo
                 case 0xb4:
                     ProcessQueryISO18000(msgTran);
                     break;
-                default:
-                    break;
             }
         }
 
-        private delegate void WriteLogUnSafe(CustomControl.LogRichTextBox logRichTxt, string strLog, int nType);
-        private void WriteLog(CustomControl.LogRichTextBox logRichTxt, string strLog, int nType)
+        private void WriteLog(LogRichTextBox logRichTxt, string strLog, int nType)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                WriteLogUnSafe InvokeWriteLog = new WriteLogUnSafe(WriteLog);
-                this.Invoke(InvokeWriteLog, new object[] { logRichTxt, strLog, nType });
+                WriteLogUnSafe InvokeWriteLog = WriteLog;
+                Invoke(InvokeWriteLog, logRichTxt, strLog, nType);
             }
             else
             {
                 if (nType == 0)
-                {
                     logRichTxt.AppendTextEx(strLog, Color.Indigo);
-                }
                 else
-                {
                     logRichTxt.AppendTextEx(strLog, Color.Red);
-                }
 
                 if (ckClearOperationRec.Checked)
-                {
                     if (logRichTxt.Lines.Length > 50)
-                    {
                         logRichTxt.Clear();
-                    }
-                }
 
                 logRichTxt.Select(logRichTxt.TextLength, 0);
                 logRichTxt.ScrollToCaret();
             }
         }
 
-        private delegate void RefreshInventoryUnsafe(byte btCmd);
         private void RefreshInventory(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshInventoryUnsafe InvokeRefresh = new RefreshInventoryUnsafe(RefreshInventory);
-                this.Invoke(InvokeRefresh, new object[] { btCmd });
+                var InvokeRefresh = new RefreshInventoryUnsafe(RefreshInventory);
+                Invoke(InvokeRefresh, btCmd);
             }
             else
             {
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0x80:
-                        {
-                            ledBuffer1.Text = m_curInventoryBuffer.nTagCount.ToString();
-                            ledBuffer2.Text = m_curInventoryBuffer.nReadRate.ToString();
+                    {
+                        ledBuffer1.Text = m_curInventoryBuffer.nTagCount.ToString();
+                        ledBuffer2.Text = m_curInventoryBuffer.nReadRate.ToString();
 
-                            TimeSpan ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
-                            ledBuffer5.Text = (ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds).ToString();
-                            int nTotalRead = 0;
-                            foreach (int nTemp in m_curInventoryBuffer.lTotalRead)
-                            {
-                                nTotalRead += nTemp;
-                            }
-                            ledBuffer4.Text = nTotalRead.ToString();
-                            int commandDuration = 0;
-                            if (m_curInventoryBuffer.nReadRate > 0)
-                            {
-                                commandDuration = m_curInventoryBuffer.nDataCount *1000/m_curInventoryBuffer.nReadRate;
-                            }
-                            ledBuffer3.Text = commandDuration.ToString();
-                            int currentAntDisplay = 0;
-                            currentAntDisplay = m_curInventoryBuffer.nCurrentAnt + 1;
-                            
-                        }
+                        var ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
+                        ledBuffer5.Text = (ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds).ToString();
+                        var nTotalRead = 0;
+                        foreach (var nTemp in m_curInventoryBuffer.lTotalRead) nTotalRead += nTemp;
+                        ledBuffer4.Text = nTotalRead.ToString();
+                        var commandDuration = 0;
+                        if (m_curInventoryBuffer.nReadRate > 0)
+                            commandDuration = m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nReadRate;
+                        ledBuffer3.Text = commandDuration.ToString();
+                        var currentAntDisplay = 0;
+                        currentAntDisplay = m_curInventoryBuffer.nCurrentAnt + 1;
+                    }
                         break;
-                    case 0x90:                        
+                    case 0x90:
                     case 0x91:
-                        {
-                            int nCount = lvBufferList.Items.Count;
-                            int nLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
-                            DataRow row = m_curInventoryBuffer.dtTagTable.Rows[nLength - 1];
+                    {
+                        var nCount = lvBufferList.Items.Count;
+                        var nLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
+                        var row = m_curInventoryBuffer.dtTagTable.Rows[nLength - 1];
 
-                            ListViewItem item = new ListViewItem();
-                            item.Text = (nCount + 1).ToString();
-                            item.SubItems.Add(row[0].ToString());
-                            item.SubItems.Add(row[1].ToString());
-                            item.SubItems.Add(row[2].ToString());
-                            item.SubItems.Add(row[3].ToString());
+                        var item = new ListViewItem();
+                        item.Text = (nCount + 1).ToString();
+                        item.SubItems.Add(row[0].ToString());
+                        item.SubItems.Add(row[1].ToString());
+                        item.SubItems.Add(row[2].ToString());
+                        item.SubItems.Add(row[3].ToString());
 
-                            string strTemp = (Convert.ToInt32(row[4].ToString()) - 129).ToString() + "dBm";
-                            item.SubItems.Add(strTemp);
-                            byte byTemp = Convert.ToByte(row[4]);
-                         /*   if (byTemp > 0x50)
-                            {
-                                item.BackColor = Color.PowderBlue;
-                            }
-                            else if (byTemp < 0x30)
-                            {
-                                item.BackColor = Color.LemonChiffon;
-                            } */
+                        var strTemp = Convert.ToInt32(row[4].ToString()) - 129 + "dBm";
+                        item.SubItems.Add(strTemp);
+                        var byTemp = Convert.ToByte(row[4]);
+                        /*   if (byTemp > 0x50)
+                           {
+                               item.BackColor = Color.PowderBlue;
+                           }
+                           else if (byTemp < 0x30)
+                           {
+                               item.BackColor = Color.LemonChiffon;
+                           } */
 
-                            item.SubItems.Add(row[5].ToString());
+                        item.SubItems.Add(row[5].ToString());
 
-                            lvBufferList.Items.Add(item);
-                            lvBufferList.Items[nCount].EnsureVisible();
+                        lvBufferList.Items.Add(item);
+                        lvBufferList.Items[nCount].EnsureVisible();
 
-                            labelBufferTagCount.Text = "Tag List: " + m_curInventoryBuffer.nTagCount.ToString() + " ";
-                           
-                        }
+                        labelBufferTagCount.Text = "Tag List: " + m_curInventoryBuffer.nTagCount + " ";
+                    }
                         break;
                     case 0x92:
-                        {
-                           
-                        }
+                    {
+                    }
                         break;
                     case 0x93:
-                        {
-                            
-                        }
-                        break;
-                    default:
+                    {
+                    }
                         break;
                 }
             }
         }
 
-        private delegate void RefreshOpTagUnsafe(byte btCmd);
         private void RefreshOpTag(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshOpTagUnsafe InvokeRefresh = new RefreshOpTagUnsafe(RefreshOpTag);
-                this.Invoke(InvokeRefresh, new object[] { btCmd });
+                var InvokeRefresh = new RefreshOpTagUnsafe(RefreshOpTag);
+                Invoke(InvokeRefresh, btCmd);
             }
             else
             {
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0x81:
                     case 0x82:
                     case 0x83:
                     case 0x84:
-                        {
-                            int nCount = ltvOperate.Items.Count;
-                            int nLength = m_curOperateTagBuffer.dtTagTable.Rows.Count;
+                    {
+                        var nCount = ltvOperate.Items.Count;
+                        var nLength = m_curOperateTagBuffer.dtTagTable.Rows.Count;
 
-                            DataRow row = m_curOperateTagBuffer.dtTagTable.Rows[nLength - 1];
+                        var row = m_curOperateTagBuffer.dtTagTable.Rows[nLength - 1];
 
-                            ListViewItem item = new ListViewItem();
-                            item.Text = (nCount + 1).ToString();
-                            item.SubItems.Add(row[0].ToString());
-                            item.SubItems.Add(row[1].ToString());
-                            item.SubItems.Add(row[2].ToString());
-                            item.SubItems.Add(row[3].ToString());
-                            item.SubItems.Add(row[4].ToString());
-                            item.SubItems.Add(row[5].ToString());
-                            item.SubItems.Add(row[6].ToString());
+                        var item = new ListViewItem();
+                        item.Text = (nCount + 1).ToString();
+                        item.SubItems.Add(row[0].ToString());
+                        item.SubItems.Add(row[1].ToString());
+                        item.SubItems.Add(row[2].ToString());
+                        item.SubItems.Add(row[3].ToString());
+                        item.SubItems.Add(row[4].ToString());
+                        item.SubItems.Add(row[5].ToString());
+                        item.SubItems.Add(row[6].ToString());
 
-                            ltvOperate.Items.Add(item);
-                        }
+                        ltvOperate.Items.Add(item);
+                    }
                         break;
                     case 0x86:
-                        {
-                            txtAccessEpcMatch.Text = m_curOperateTagBuffer.strAccessEpcMatch;
-                        }
-                        break;
-                    default:
+                    {
+                        txtAccessEpcMatch.Text = m_curOperateTagBuffer.strAccessEpcMatch;
+                    }
                         break;
                 }
             }
         }
 
-        private delegate void RefreshInventoryRealUnsafe(byte btCmd);
         private void RefreshInventoryReal(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshInventoryRealUnsafe InvokeRefresh = new RefreshInventoryRealUnsafe(RefreshInventoryReal);
-                this.Invoke(InvokeRefresh, new object[] { btCmd });
+                var InvokeRefresh = new RefreshInventoryRealUnsafe(RefreshInventoryReal);
+                Invoke(InvokeRefresh, btCmd);
             }
             else
             {
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0x89:
                     case 0x8B:
+                    {
+                        var nTagCount = m_curInventoryBuffer.dtTagTable.Rows.Count;
+                        var nTotalRead = m_nTotal; // m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
+                        var ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
+                        var nTotalTime = ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds;
+                        var nCaculatedReadRate = 0;
+                        var nCommandDuation = 0;
+
+                        if (m_curInventoryBuffer.nReadRate == 0
+                        ) //Software measure the speed before reader return speed.
                         {
-                            int nTagCount = m_curInventoryBuffer.dtTagTable.Rows.Count;
-                            int nTotalRead = m_nTotal;// m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
-                            TimeSpan ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
-                            int nTotalTime = ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds;
-                            int nCaculatedReadRate = 0;
-                            int nCommandDuation = 0;
-
-                            if (m_curInventoryBuffer.nReadRate == 0) //Software measure the speed before reader return speed.
-                            {
-                                if (nTotalTime > 0)
-                                {
-                                    nCaculatedReadRate = (nTotalRead * 1000 / nTotalTime);
-                                }
-                            }
-                            else
-                            {
-                                nCommandDuation = m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nReadRate;
-                                nCaculatedReadRate = m_curInventoryBuffer.nReadRate;
-                            }
-
-                            //Variable of list
-                            int nEpcCount = 0;
-                            int nEpcLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
-                                                       
-                            ledReal1.Text = nTagCount.ToString();
-                            ledReal2.Text = nCaculatedReadRate.ToString();
-                            
-                            ledReal5.Text = nTotalTime.ToString();
-                            ledReal3.Text = nTotalRead.ToString();
-                            ledReal4.Text = nCommandDuation.ToString();  //The actual command execution time.
-                            tbRealMaxRssi.Text = (m_curInventoryBuffer.nMaxRSSI - 129).ToString() + "dBm";
-                            tbRealMinRssi.Text = (m_curInventoryBuffer.nMinRSSI - 129).ToString() + "dBm";
-                            lbRealTagCount.Text = "Tags' EPC list (no-repeat): " + nTagCount.ToString() + " ";
-
-                            nEpcCount = lvRealList.Items.Count;
-                                
-                                                        
-                            if (nEpcCount < nEpcLength)
-                            {
-                                DataRow row = m_curInventoryBuffer.dtTagTable.Rows[nEpcLength - 1];
-
-                                ListViewItem item = new ListViewItem();
-
-                                var id = (nEpcCount + 1).ToString();
-                                var epc = row[2].ToString().Replace(" ","");
-                                var pc = row[0].ToString();
-                                var idCount = row[5].ToString();
-                                var rssi = (Convert.ToInt32(row[4]) - 129) + "dBm";
-                                var freq = row[6].ToString();
-
-                                item.Text = id;
-                                item.SubItems.Add(epc.ToString());
-                                item.SubItems.Add(pc);
-                                item.SubItems.Add(idCount);
-                                item.SubItems.Add(rssi);
-                                item.SubItems.Add(freq);
-                                lvRealList.Items.Add(item);
-                                lvRealList.Items[nEpcCount].EnsureVisible();
-                                if (cbWriteDB.Checked)
-                                {
-                                    WriteToDatabase(epc);
-                                }
-                               
-                            }
-                            //else
-                            //{
-                            //    int nIndex = 0;
-                            //    foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
-                            //    {
-                            //        ListViewItem item = ltvInventoryEpc.Items[nIndex];
-                            //        item.SubItems[3].Text = row[5].ToString();
-                            //        nIndex++;
-                            //    }
-                            //}
-
-                            //Update the number of read time in list.
-                            if (m_nTotal % m_nRealRate == 1)
-                            {
-                                int nIndex = 0;
-                                foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
-                                {
-                                    ListViewItem item;
-                                    item = lvRealList.Items[nIndex];
-                                    item.SubItems[3].Text = row[5].ToString();
-                                    item.SubItems[4].Text = (Convert.ToInt32(row[4]) - 129).ToString() + "dBm";
-                                    item.SubItems[5].Text = row[6].ToString();
-
-                                    nIndex++;
-                                }
-                            }
-
-                            //if (ltvInventoryEpc.SelectedIndices.Count != 0)
-                            //{
-                            //    int nDetailCount = ltvInventoryTag.Items.Count;
-                            //    int nDetailLength = m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
-
-                            //    foreach (int nIndex in ltvInventoryEpc.SelectedIndices)
-                            //    {
-                            //        ListViewItem itemEpc = ltvInventoryEpc.Items[nIndex];
-                            //        DataRow row = m_curInventoryBuffer.dtTagDetailTable.Rows[nDetailLength - 1];
-                            //        if (itemEpc.SubItems[1].Text == row[0].ToString())
-                            //        {
-                            //            ListViewItem item = new ListViewItem();
-                            //            item.Text = (nDetailCount + 1).ToString();
-                            //            item.SubItems.Add(row[0].ToString());
-
-                            //            string strTemp = (Convert.ToInt32(row[1].ToString()) - 129).ToString() + "dBm";
-                            //            item.SubItems.Add(strTemp);
-                            //            byte byTemp = Convert.ToByte(row[1]);
-                            //            if (byTemp > 0x50)
-                            //            {
-                            //                item.BackColor = Color.PowderBlue;
-                            //            }
-                            //            else if (byTemp < 0x30)
-                            //            {
-                            //                item.BackColor = Color.LemonChiffon;
-                            //            }
-
-                            //            item.SubItems.Add(row[2].ToString());
-                            //            item.SubItems.Add(row[3].ToString());
-
-                            //            ltvInventoryTag.Items.Add(item);
-                            //            ltvInventoryTag.Items[nDetailCount].EnsureVisible();
-                            //        }
-                            //    }
-                            //}
-                            //else
-                            //{
-                            //    int nDetailCount = ltvInventoryTag.Items.Count;
-                            //    int nDetailLength = m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
-
-                            //    DataRow row = m_curInventoryBuffer.dtTagDetailTable.Rows[nDetailLength - 1];
-                            //    ListViewItem item = new ListViewItem();
-                            //    item.Text = (nDetailCount + 1).ToString();
-                            //    item.SubItems.Add(row[0].ToString());
-
-                            //    string strTemp = (Convert.ToInt32(row[1].ToString()) - 129).ToString() + "dBm";
-                            //    item.SubItems.Add(strTemp);
-                            //    byte byTemp = Convert.ToByte(row[1]);
-                            //    if (byTemp > 0x50)
-                            //    {
-                            //        item.BackColor = Color.PowderBlue;
-                            //    }
-                            //    else if (byTemp < 0x30)
-                            //    {
-                            //        item.BackColor = Color.LemonChiffon;
-                            //    }
-
-                            //    item.SubItems.Add(row[2].ToString());
-                            //    item.SubItems.Add(row[3].ToString());
-
-                            //    ltvInventoryTag.Items.Add(item);
-                            //    ltvInventoryTag.Items[nDetailCount].EnsureVisible();
-                            //}
-                            
-                            
+                            if (nTotalTime > 0) nCaculatedReadRate = nTotalRead * 1000 / nTotalTime;
                         }
+                        else
+                        {
+                            nCommandDuation = m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nReadRate;
+                            nCaculatedReadRate = m_curInventoryBuffer.nReadRate;
+                        }
+
+                        //Variable of list
+                        var nEpcCount = 0;
+                        var nEpcLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
+
+                        ledReal1.Text = nTagCount.ToString();
+                        ledReal2.Text = nCaculatedReadRate.ToString();
+
+                        ledReal5.Text = nTotalTime.ToString();
+                        ledReal3.Text = nTotalRead.ToString();
+                        ledReal4.Text = nCommandDuation.ToString(); //The actual command execution time.
+                        tbRealMaxRssi.Text = m_curInventoryBuffer.nMaxRSSI - 129 + "dBm";
+                        tbRealMinRssi.Text = m_curInventoryBuffer.nMinRSSI - 129 + "dBm";
+                        lbRealTagCount.Text = "Tags' EPC list (no-repeat): " + nTagCount + " ";
+
+                        nEpcCount = lvRealList.Items.Count;
+
+
+                        if (nEpcCount < nEpcLength)
+                        {
+                            var row = m_curInventoryBuffer.dtTagTable.Rows[nEpcLength - 1];
+
+                            var item = new ListViewItem();
+
+                            var id = (nEpcCount + 1).ToString();
+                            var epc = row[2].ToString().Replace(" ", "");
+                            var pc = row[0].ToString();
+                            var idCount = row[5].ToString();
+                            var rssi = Convert.ToInt32(row[4]) - 129 + "dBm";
+                            var freq = row[6].ToString();
+
+                            item.Text = id;
+                            item.SubItems.Add(epc);
+                            item.SubItems.Add(pc);
+                            item.SubItems.Add(idCount);
+                            item.SubItems.Add(rssi);
+                            item.SubItems.Add(freq);
+                            lvRealList.Items.Add(item);
+                            lvRealList.Items[nEpcCount].EnsureVisible();
+                            if (cbWriteDB.Checked) WriteToDatabase(epc);
+                        }
+                        else
+                        {
+                            int nIndex = 0;
+                            foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
+                            {
+                                ListViewItem item = lvRealList.Items[nIndex];
+                                item.SubItems[3].Text = row[5].ToString();
+                                nIndex++;
+                            }
+                        }
+
+                        //Update the number of read time in list.
+                        if (m_nTotal % m_nRealRate == 1)
+                        {
+                            var nIndex = 0;
+                            foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
+                            {
+                                ListViewItem item;
+                                item = lvRealList.Items[nIndex];
+                                item.SubItems[3].Text = row[5].ToString();
+                                item.SubItems[4].Text = Convert.ToInt32(row[4]) - 129 + "dBm";
+                                item.SubItems[5].Text = row[6].ToString();
+
+                                nIndex++;
+                            }
+                        }
+
+                        //if (ltvInventoryEpc.SelectedIndices.Count != 0)
+                        //{
+                        //    int nDetailCount = ltvInventoryTag.Items.Count;
+                        //    int nDetailLength = m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
+
+                        //    foreach (int nIndex in ltvInventoryEpc.SelectedIndices)
+                        //    {
+                        //        ListViewItem itemEpc = ltvInventoryEpc.Items[nIndex];
+                        //        DataRow row = m_curInventoryBuffer.dtTagDetailTable.Rows[nDetailLength - 1];
+                        //        if (itemEpc.SubItems[1].Text == row[0].ToString())
+                        //        {
+                        //            ListViewItem item = new ListViewItem();
+                        //            item.Text = (nDetailCount + 1).ToString();
+                        //            item.SubItems.Add(row[0].ToString());
+
+                        //            string strTemp = (Convert.ToInt32(row[1].ToString()) - 129).ToString() + "dBm";
+                        //            item.SubItems.Add(strTemp);
+                        //            byte byTemp = Convert.ToByte(row[1]);
+                        //            if (byTemp > 0x50)
+                        //            {
+                        //                item.BackColor = Color.PowderBlue;
+                        //            }
+                        //            else if (byTemp < 0x30)
+                        //            {
+                        //                item.BackColor = Color.LemonChiffon;
+                        //            }
+
+                        //            item.SubItems.Add(row[2].ToString());
+                        //            item.SubItems.Add(row[3].ToString());
+
+                        //            ltvInventoryTag.Items.Add(item);
+                        //            ltvInventoryTag.Items[nDetailCount].EnsureVisible();
+                        //        }
+                        //    }
+                        //}
+                        //else
+                        //{
+                        //    int nDetailCount = ltvInventoryTag.Items.Count;
+                        //    int nDetailLength = m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
+
+                        //    DataRow row = m_curInventoryBuffer.dtTagDetailTable.Rows[nDetailLength - 1];
+                        //    ListViewItem item = new ListViewItem();
+                        //    item.Text = (nDetailCount + 1).ToString();
+                        //    item.SubItems.Add(row[0].ToString());
+
+                        //    string strTemp = (Convert.ToInt32(row[1].ToString()) - 129).ToString() + "dBm";
+                        //    item.SubItems.Add(strTemp);
+                        //    byte byTemp = Convert.ToByte(row[1]);
+                        //    if (byTemp > 0x50)
+                        //    {
+                        //        item.BackColor = Color.PowderBlue;
+                        //    }
+                        //    else if (byTemp < 0x30)
+                        //    {
+                        //        item.BackColor = Color.LemonChiffon;
+                        //    }
+
+                        //    item.SubItems.Add(row[2].ToString());
+                        //    item.SubItems.Add(row[3].ToString());
+
+                        //    ltvInventoryTag.Items.Add(item);
+                        //    ltvInventoryTag.Items[nDetailCount].EnsureVisible();
+                        //}
+                    }
                         break;
 
-                   
+
                     case 0x00:
                     case 0x01:
-                        {
-                            m_bLockTab = false;
-                                                      
-                            
-                        }
-                        break;
-                    default:
+                    {
+                        m_bLockTab = false;
+                    }
                         break;
                 }
             }
@@ -617,12 +584,8 @@ namespace UHFDemo
         {
             var host = Dns.GetHostEntry(Dns.GetHostName());
             foreach (var ip in host.AddressList)
-            {
                 if (ip.AddressFamily == AddressFamily.InterNetwork)
-                {
                     return ip.ToString();
-                }
-            }
             throw new Exception("No network adapters with an IPv4 address in the system!");
         }
 
@@ -632,12 +595,13 @@ namespace UHFDemo
             dbCon.DatabaseName = "myrace";
             if (dbCon.IsConnect())
             {
-                var query = "INSERT INTO reader (`edition_ID`, `gateway`, `rfid_adress`, `epc`,  `year`, `time`, `created_at`, `updated_at`)" +
-                            "VALUES(@id, @gateway, @rfid, @epc, @year, @time, @created, @updated)"; //"SELECT * FROM admin WHERE admin_username=@val1 AND admin_password=PASSWORD(@val2)"
+                var query =
+                    "INSERT INTO reader (`edition_ID`, `gateway`, `rfid_adress`, `epc`,  `year`, `time`, `created_at`, `updated_at`)" +
+                    "VALUES(@id, @gateway, @rfid, @epc, @year, @time, @created, @updated)"; //"SELECT * FROM admin WHERE admin_username=@val1 AND admin_password=PASSWORD(@val2)"
                 var cmd = new MySqlCommand(query, dbCon.Connection);
                 var currentTime = DateTime.Now.ToLocalTime();
                 cmd.Parameters.AddWithValue("@id", (int) numericUpDown1.Value);
-                cmd.Parameters.AddWithValue("@gateway", (char)'F');
+                cmd.Parameters.AddWithValue("@gateway", 'F');
                 cmd.Parameters.AddWithValue("@rfid", GetLocalIPAddress());
                 cmd.Parameters.AddWithValue("@epc", epc);
                 cmd.Parameters.AddWithValue("@year", DateTime.Now.Year);
@@ -659,329 +623,283 @@ namespace UHFDemo
             }
         }
 
-        private delegate void RefreshFastSwitchUnsafe(byte btCmd);
         private void RefreshFastSwitch(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshFastSwitchUnsafe InvokeRefreshFastSwitch = new RefreshFastSwitchUnsafe(RefreshFastSwitch);
-                this.Invoke(InvokeRefreshFastSwitch, new object[] { btCmd });
+                var InvokeRefreshFastSwitch = new RefreshFastSwitchUnsafe(RefreshFastSwitch);
+                Invoke(InvokeRefreshFastSwitch, btCmd);
             }
             else
             {
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0x00:
+                    {
+                        var nTagCount = m_curInventoryBuffer.dtTagTable.Rows.Count;
+                        var nTotalRead = m_nTotal; // m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
+                        var ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
+                        var nTotalTime = ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds;
+
+                        ledFast1.Text = nTagCount.ToString(); //Total number of tags
+                        if (m_curInventoryBuffer.nCommandDuration > 0)
+                            ledFast2.Text =
+                                (m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nCommandDuration)
+                                .ToString(); //Read speed
+                        else
+                            ledFast2.Text = "";
+
+                        ledFast3.Text = m_curInventoryBuffer.nCommandDuration.ToString(); //Command duration
+
+                        ledFast5.Text = nTotalTime.ToString(); //Total inventory duration
+                        ledFast4.Text = nTotalRead.ToString();
+
+                        txtFastMaxRssi.Text = m_curInventoryBuffer.nMaxRSSI - 129 + "dBm";
+                        txtFastMinRssi.Text = m_curInventoryBuffer.nMinRSSI - 129 + "dBm";
+                        txtFastTagList.Text = "Tags' EPC list (no-repeat): " + nTagCount + " ";
+
+                        //Forming the list
+                        var nEpcCount = lvFastList.Items.Count;
+                        var nEpcLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
+                        if (nEpcCount < nEpcLength)
                         {
-                            int nTagCount = m_curInventoryBuffer.dtTagTable.Rows.Count;
-                            int nTotalRead = m_nTotal;// m_curInventoryBuffer.dtTagDetailTable.Rows.Count;
-                            TimeSpan ts = m_curInventoryBuffer.dtEndInventory - m_curInventoryBuffer.dtStartInventory;
-                            int nTotalTime = ts.Minutes * 60 * 1000 + ts.Seconds * 1000 + ts.Milliseconds;
+                            var row = m_curInventoryBuffer.dtTagTable.Rows[nEpcLength - 1];
 
-                            ledFast1.Text = nTagCount.ToString(); //Total number of tags
-                            if (m_curInventoryBuffer.nCommandDuration > 0)
-                            {
-                                ledFast2.Text = (m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nCommandDuration).ToString(); //Read speed
-                            }
-                            else
-                            {
-                                ledFast2.Text = "";
-                            }
+                            var item = new ListViewItem();
+                            item.Text = (nEpcCount + 1).ToString();
+                            item.SubItems.Add(row[2].ToString());
+                            item.SubItems.Add(row[0].ToString());
+                            //item.SubItems.Add(row[5].ToString());
+                            item.SubItems.Add(row[7] + "  /  " + row[8] + "  /  " + row[9] + "  /  " + row[10]);
+                            item.SubItems.Add(Convert.ToInt32(row[4]) - 129 + "dBm");
+                            item.SubItems.Add(row[6].ToString());
 
-                            ledFast3.Text = m_curInventoryBuffer.nCommandDuration.ToString(); //Command duration
-
-                            ledFast5.Text = nTotalTime.ToString(); //Total inventory duration
-                            ledFast4.Text = nTotalRead.ToString();
-                           
-                            txtFastMaxRssi.Text = (m_curInventoryBuffer.nMaxRSSI - 129).ToString() + "dBm";
-                            txtFastMinRssi.Text = (m_curInventoryBuffer.nMinRSSI - 129).ToString() + "dBm";
-                            txtFastTagList.Text = "Tags' EPC list (no-repeat): " + nTagCount.ToString() + " ";
-
-                            //Forming the list
-                            int nEpcCount = lvFastList.Items.Count;
-                            int nEpcLength = m_curInventoryBuffer.dtTagTable.Rows.Count;
-                            if (nEpcCount < nEpcLength)
-                            {
-                                DataRow row = m_curInventoryBuffer.dtTagTable.Rows[nEpcLength - 1];
-
-                                ListViewItem item = new ListViewItem();
-                                item.Text = (nEpcCount + 1).ToString();
-                                item.SubItems.Add(row[2].ToString());
-                                item.SubItems.Add(row[0].ToString());
-                                //item.SubItems.Add(row[5].ToString());
-                                item.SubItems.Add(row[7].ToString() + "  /  " + row[8].ToString() + "  /  " + row[9].ToString() + "  /  " + row[10]);
-                                item.SubItems.Add((Convert.ToInt32(row[4]) - 129).ToString() + "dBm");
-                                item.SubItems.Add(row[6].ToString());
-
-                                lvFastList.Items.Add(item);
-                                lvFastList.Items[nEpcCount].EnsureVisible();
-                            }
-
-                            //Update read frequency of list
-                            if (m_nTotal % m_nRealRate == 1)
-                            {
-                                int nIndex = 0;
-                                foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
-                                {
-                                    ListViewItem item = lvFastList.Items[nIndex];
-                                    //item.SubItems[3].Text = row[5].ToString();
-                                    item.SubItems[3].Text = (row[7].ToString() + "  /  " + row[8].ToString() + "  /  " + row[9].ToString() + "  /  " + row[10]);
-                                    item.SubItems[4].Text = (Convert.ToInt32(row[4]) - 129).ToString() + "dBm";
-                                    item.SubItems[5].Text = row[6].ToString();
-
-                                    nIndex++;
-                                }
-                            }
-
+                            lvFastList.Items.Add(item);
+                            lvFastList.Items[nEpcCount].EnsureVisible();
                         }
+
+                        //Update read frequency of list
+                        if (m_nTotal % m_nRealRate == 1)
+                        {
+                            var nIndex = 0;
+                            foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
+                            {
+                                var item = lvFastList.Items[nIndex];
+                                //item.SubItems[3].Text = row[5].ToString();
+                                item.SubItems[3].Text =
+                                    row[7] + "  /  " + row[8] + "  /  " + row[9] + "  /  " + row[10];
+                                item.SubItems[4].Text = Convert.ToInt32(row[4]) - 129 + "dBm";
+                                item.SubItems[5].Text = row[6].ToString();
+
+                                nIndex++;
+                            }
+                        }
+                    }
                         break;
                     case 0x01:
-                        {
-
-                        }
+                    {
+                    }
                         break;
                     case 0x02:
-                        {
-
-                            //ledFast1.Text.Text = m_nSwitchTime.ToString();
-                            //ledFast1.Text.Text = m_nSwitchTotal.ToString();
-                        }
+                    {
+                        //ledFast1.Text.Text = m_nSwitchTime.ToString();
+                        //ledFast1.Text.Text = m_nSwitchTotal.ToString();
+                    }
                         break;
-                    default:
-                        break;
-                }                
+                }
             }
         }
 
-        private delegate void RefreshReadSettingUnsafe(byte btCmd);
         private void RefreshReadSetting(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshReadSettingUnsafe InvokeRefresh = new RefreshReadSettingUnsafe(RefreshReadSetting);
-                this.Invoke(InvokeRefresh, new object[] { btCmd });
+                var InvokeRefresh = new RefreshReadSettingUnsafe(RefreshReadSetting);
+                Invoke(InvokeRefresh, btCmd);
             }
             else
             {
                 htxtReadId.Text = string.Format("{0:X2}", m_curSetting.btReadId);
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0x6A:
                         if (m_curSetting.btLinkProfile == 0xd0)
-                        {
                             rdbProfile0.Checked = true;
-                        }
                         else if (m_curSetting.btLinkProfile == 0xd1)
-                        {
                             rdbProfile1.Checked = true;
-                        }
                         else if (m_curSetting.btLinkProfile == 0xd2)
-                        {
                             rdbProfile2.Checked = true;
-                        }
-                        else if (m_curSetting.btLinkProfile == 0xd3)
-                        {
-                            rdbProfile3.Checked = true;
-                        }
-                        else
-                        {
-                        }
-                        
+                        else if (m_curSetting.btLinkProfile == 0xd3) rdbProfile3.Checked = true;
+
                         break;
                     case 0x68:
                         htbGetIdentifier.Text = m_curSetting.btReaderIdentifier;
 
                         break;
                     case 0x72:
-                        {
-                            txtFirmwareVersion.Text = m_curSetting.btMajor.ToString() + "." + m_curSetting.btMinor.ToString();
-                        }
+                    {
+                        txtFirmwareVersion.Text = m_curSetting.btMajor + "." + m_curSetting.btMinor;
+                    }
                         break;
                     case 0x75:
-                        {
-                            cmbWorkAnt.SelectedIndex = m_curSetting.btWorkAntenna;
-                        }
+                    {
+                        cmbWorkAnt.SelectedIndex = m_curSetting.btWorkAntenna;
+                    }
                         break;
                     case 0x77:
-                        {
-                            txtOutputPower.Text = m_curSetting.btOutputPower.ToString();
-                        }
+                    {
+                        txtOutputPower.Text = m_curSetting.btOutputPower.ToString();
+                    }
                         break;
                     case 0x79:
+                    {
+                        switch (m_curSetting.btRegion)
                         {
-                            switch(m_curSetting.btRegion)
+                            case 0x01:
                             {
-                                case 0x01:
-                                    {
-                                        cbUserDefineFreq.Checked = false;
-                                        textStartFreq.Text = "";
-                                        TextFreqInterval.Text = "";
-                                        textFreqQuantity.Text = "";
-                                        rdbRegionFcc.Checked = true;
-                                        cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart) - 7;
-                                        cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd) - 7;
-                                    }
-                                    break;
-                                case 0x02:
-                                    {
-                                        cbUserDefineFreq.Checked = false;
-                                        textStartFreq.Text = "";
-                                        TextFreqInterval.Text = "";
-                                        textFreqQuantity.Text = "";
-                                        rdbRegionEtsi.Checked = true;
-                                        cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart);
-                                        cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd);
-                                    }
-                                    break;
-                                case 0x03:
-                                    {
-                                        cbUserDefineFreq.Checked = false;
-                                        textStartFreq.Text = "";
-                                        TextFreqInterval.Text = "";
-                                        textFreqQuantity.Text = "";
-                                        rdbRegionChn.Checked = true;
-                                        cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart) - 43;
-                                        cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd) - 43;
-                                    }
-                                    break;
-                                case 0x04:
-                                    {
-                                        cbUserDefineFreq.Checked = true;
-                                        rdbRegionChn.Checked = false;
-                                        rdbRegionEtsi.Checked = false;
-                                        rdbRegionFcc.Checked = false;
-                                        cmbFrequencyStart.SelectedIndex = -1;
-                                        cmbFrequencyEnd.SelectedIndex = -1;
-                                        textStartFreq.Text = m_curSetting.nUserDefineStartFrequency.ToString();
-                                        TextFreqInterval.Text = Convert.ToString(m_curSetting.btUserDefineFrequencyInterval * 10);
-                                        textFreqQuantity.Text = m_curSetting.btUserDefineChannelQuantity.ToString();
-                                    }
-                                    break;
-                                default:
-                                    break;
+                                cbUserDefineFreq.Checked = false;
+                                textStartFreq.Text = "";
+                                TextFreqInterval.Text = "";
+                                textFreqQuantity.Text = "";
+                                rdbRegionFcc.Checked = true;
+                                cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart) - 7;
+                                cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd) - 7;
                             }
+                                break;
+                            case 0x02:
+                            {
+                                cbUserDefineFreq.Checked = false;
+                                textStartFreq.Text = "";
+                                TextFreqInterval.Text = "";
+                                textFreqQuantity.Text = "";
+                                rdbRegionEtsi.Checked = true;
+                                cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart);
+                                cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd);
+                            }
+                                break;
+                            case 0x03:
+                            {
+                                cbUserDefineFreq.Checked = false;
+                                textStartFreq.Text = "";
+                                TextFreqInterval.Text = "";
+                                textFreqQuantity.Text = "";
+                                rdbRegionChn.Checked = true;
+                                cmbFrequencyStart.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyStart) - 43;
+                                cmbFrequencyEnd.SelectedIndex = Convert.ToInt32(m_curSetting.btFrequencyEnd) - 43;
+                            }
+                                break;
+                            case 0x04:
+                            {
+                                cbUserDefineFreq.Checked = true;
+                                rdbRegionChn.Checked = false;
+                                rdbRegionEtsi.Checked = false;
+                                rdbRegionFcc.Checked = false;
+                                cmbFrequencyStart.SelectedIndex = -1;
+                                cmbFrequencyEnd.SelectedIndex = -1;
+                                textStartFreq.Text = m_curSetting.nUserDefineStartFrequency.ToString();
+                                TextFreqInterval.Text =
+                                    Convert.ToString(m_curSetting.btUserDefineFrequencyInterval * 10);
+                                textFreqQuantity.Text = m_curSetting.btUserDefineChannelQuantity.ToString();
+                            }
+                                break;
                         }
+                    }
                         break;
                     case 0x7B:
-                        {
-                            string strTemperature = string.Empty;
-                            if (m_curSetting.btPlusMinus == 0x0)
-                            {
-                                strTemperature = "-" + m_curSetting.btTemperature.ToString() + "℃";
-                            }
-                            else
-                            {
-                                strTemperature = m_curSetting.btTemperature.ToString() + "℃";
-                            }
-                            txtReaderTemperature.Text = strTemperature;
-                        }
+                    {
+                        var strTemperature = string.Empty;
+                        if (m_curSetting.btPlusMinus == 0x0)
+                            strTemperature = "-" + m_curSetting.btTemperature + "℃";
+                        else
+                            strTemperature = m_curSetting.btTemperature + "℃";
+                        txtReaderTemperature.Text = strTemperature;
+                    }
                         break;
                     case 0x7D:
-                        {
-                            if (m_curSetting.btDrmMode == 0x00)
-                            {
-                                rdbDrmModeClose.Checked = true;
-                            }
-                            else
-                            {
-                                rdbDrmModeOpen.Checked = true;
-                            }
-                        }
+                    {
+                        if (m_curSetting.btDrmMode == 0x00)
+                            rdbDrmModeClose.Checked = true;
+                        else
+                            rdbDrmModeOpen.Checked = true;
+                    }
                         break;
                     case 0x7E:
-                        {
-                            textReturnLoss.Text = m_curSetting.btAntImpedance.ToString() + " dB";
-                        }
+                    {
+                        textReturnLoss.Text = m_curSetting.btAntImpedance + " dB";
+                    }
                         break;
 
-                    
+
                     case 0x8E:
-                        {
-                            if (m_curSetting.btMonzaStatus == 0x8D)
-                            {
-                                rdbMonzaOn.Checked = true;
-                            }
-                            else
-                            {
-                                rdbMonzaOff.Checked = true;
-                            }
-                        }
+                    {
+                        if (m_curSetting.btMonzaStatus == 0x8D)
+                            rdbMonzaOn.Checked = true;
+                        else
+                            rdbMonzaOff.Checked = true;
+                    }
                         break;
                     case 0x60:
-                        {
-                            if (m_curSetting.btGpio1Value == 0x00)
-                            {
-                                rdbGpio1Low.Checked = true;
-                            }
-                            else
-                            {
-                                rdbGpio1High.Checked = true;
-                            }
+                    {
+                        if (m_curSetting.btGpio1Value == 0x00)
+                            rdbGpio1Low.Checked = true;
+                        else
+                            rdbGpio1High.Checked = true;
 
-                            if (m_curSetting.btGpio2Value == 0x00)
-                            {
-                                rdbGpio2Low.Checked = true;
-                            }
-                            else
-                            {
-                                rdbGpio2High.Checked = true;
-                            }
-                        }
+                        if (m_curSetting.btGpio2Value == 0x00)
+                            rdbGpio2Low.Checked = true;
+                        else
+                            rdbGpio2High.Checked = true;
+                    }
                         break;
                     case 0x63:
-                        {
-                            tbAntDectector.Text = m_curSetting.btAntDetector.ToString();
-                        }
-                        break;
-                    default:
+                    {
+                        tbAntDectector.Text = m_curSetting.btAntDetector.ToString();
+                    }
                         break;
                 }
             }
         }
 
-        private delegate void RunLoopInventoryUnsafe();
         private void RunLoopInventroy()
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RunLoopInventoryUnsafe InvokeRunLoopInventory = new RunLoopInventoryUnsafe(RunLoopInventroy);
-                this.Invoke(InvokeRunLoopInventory, new object[] { });
+                var InvokeRunLoopInventory = new RunLoopInventoryUnsafe(RunLoopInventroy);
+                Invoke(InvokeRunLoopInventory, new object[] { });
             }
             else
             {
                 //Verify whether all antennas are completed inventory
-                if ( m_curInventoryBuffer.nIndexAntenna < m_curInventoryBuffer.lAntenna.Count - 1 || m_curInventoryBuffer.nCommond == 0)
+                if (m_curInventoryBuffer.nIndexAntenna < m_curInventoryBuffer.lAntenna.Count - 1 ||
+                    m_curInventoryBuffer.nCommond == 0)
                 {
                     if (m_curInventoryBuffer.nCommond == 0)
                     {
                         m_curInventoryBuffer.nCommond = 1;
-                        
+
                         if (m_curInventoryBuffer.bLoopInventoryReal)
                         {
                             //m_bLockTab = true;
                             //btnInventory.Enabled = false;
-                            if (m_curInventoryBuffer.bLoopCustomizedSession)//User define Session and Inventoried Flag. 
-                            {
-                                reader.CustomizedInventory(m_curSetting.btReadId, m_curInventoryBuffer.btSession, m_curInventoryBuffer.btTarget, m_curInventoryBuffer.btRepeat); 
-                            }
+                            if (m_curInventoryBuffer.bLoopCustomizedSession
+                            ) //User define Session and Inventoried Flag. 
+                                reader.CustomizedInventory(m_curSetting.btReadId, m_curInventoryBuffer.btSession,
+                                    m_curInventoryBuffer.btTarget, m_curInventoryBuffer.btRepeat);
                             else //Inventory tags in real time mode
-                            {
                                 reader.InventoryReal(m_curSetting.btReadId, m_curInventoryBuffer.btRepeat);
-                                
-                            }
                         }
                         else
                         {
                             if (m_curInventoryBuffer.bLoopInventory)
                                 reader.Inventory(m_curSetting.btReadId, m_curInventoryBuffer.btRepeat);
-                        }                        
+                        }
                     }
                     else
                     {
                         m_curInventoryBuffer.nCommond = 0;
                         m_curInventoryBuffer.nIndexAntenna++;
 
-                        byte btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
+                        var btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
                         reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
                         m_curSetting.btWorkAntenna = btWorkAntenna;
                     }
@@ -992,127 +910,113 @@ namespace UHFDemo
                     m_curInventoryBuffer.nIndexAntenna = 0;
                     m_curInventoryBuffer.nCommond = 0;
 
-                    byte btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
+                    var btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
                     reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
                     m_curSetting.btWorkAntenna = btWorkAntenna;
                 }
             }
         }
 
-        private delegate void RunLoopFastSwitchUnsafe();
         private void RunLoopFastSwitch()
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RunLoopFastSwitchUnsafe InvokeRunLoopFastSwitch = new RunLoopFastSwitchUnsafe(RunLoopFastSwitch);
-                this.Invoke(InvokeRunLoopFastSwitch, new object[] { });
+                var InvokeRunLoopFastSwitch = new RunLoopFastSwitchUnsafe(RunLoopFastSwitch);
+                Invoke(InvokeRunLoopFastSwitch, new object[] { });
             }
             else
             {
-                if (m_curInventoryBuffer.bLoopInventory)
-                {
-                    reader.FastSwitchInventory(m_curSetting.btReadId, m_btAryData);
-                }
+                if (m_curInventoryBuffer.bLoopInventory) reader.FastSwitchInventory(m_curSetting.btReadId, m_btAryData);
             }
         }
 
-        private delegate void RefreshISO18000Unsafe(byte btCmd);
         private void RefreshISO18000(byte btCmd)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RefreshISO18000Unsafe InvokeRefreshISO18000 = new RefreshISO18000Unsafe(RefreshISO18000);
-                this.Invoke(InvokeRefreshISO18000, new object[] {btCmd });
+                var InvokeRefreshISO18000 = new RefreshISO18000Unsafe(RefreshISO18000);
+                Invoke(InvokeRefreshISO18000, btCmd);
             }
             else
             {
-                switch(btCmd)
+                switch (btCmd)
                 {
                     case 0xb0:
+                    {
+                        ltvTagISO18000.Items.Clear();
+                        var nLength = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count;
+                        var nIndex = 1;
+                        foreach (DataRow row in m_curOperateTagISO18000Buffer.dtTagTable.Rows)
                         {
-                            ltvTagISO18000.Items.Clear();
-                            int nLength = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count;
-                            int nIndex = 1;
-                            foreach (DataRow row in m_curOperateTagISO18000Buffer.dtTagTable.Rows)
-                            {
-                                ListViewItem item = new ListViewItem();
-                                item.Text = nIndex.ToString();
-                                item.SubItems.Add(row[1].ToString());
-                                item.SubItems.Add(row[0].ToString());
-                                item.SubItems.Add(row[2].ToString());
-                                ltvTagISO18000.Items.Add(item);
+                            var item = new ListViewItem();
+                            item.Text = nIndex.ToString();
+                            item.SubItems.Add(row[1].ToString());
+                            item.SubItems.Add(row[0].ToString());
+                            item.SubItems.Add(row[2].ToString());
+                            ltvTagISO18000.Items.Add(item);
 
-                                nIndex++;
-                            }
-
-                            //txtTagCountISO18000.Text = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count.ToString();
-
-                            if (m_bContinue)
-                            {
-                                reader.InventoryISO18000(m_curSetting.btReadId);
-                            }
-                            else
-                            {
-                                WriteLog(lrtxtLog, "Stop", 0);
-                            }
+                            nIndex++;
                         }
+
+                        //txtTagCountISO18000.Text = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count.ToString();
+
+                        if (m_bContinue)
+                            reader.InventoryISO18000(m_curSetting.btReadId);
+                        else
+                            WriteLog(lrtxtLog, "Stop", 0);
+                    }
                         break;
                     case 0xb1:
-                        {
-                            htxtReadData18000.Text = m_curOperateTagISO18000Buffer.strReadData;
-                        }
+                    {
+                        htxtReadData18000.Text = m_curOperateTagISO18000Buffer.strReadData;
+                    }
                         break;
                     case 0xb2:
-                        {
-                            //txtWriteLength.Text = m_curOperateTagISO18000Buffer.btWriteLength.ToString();
-                        }
+                    {
+                        //txtWriteLength.Text = m_curOperateTagISO18000Buffer.btWriteLength.ToString();
+                    }
                         break;
                     case 0xb3:
-                        {
-                            //switch(m_curOperateTagISO18000Buffer.btStatus)
-                            //{
-                            //    case 0x00:
-                            //        MessageBox.Show("The byte successfully locked");
-                            //        break;
-                            //    case 0xFE:
-                            //        MessageBox.Show("Status of the byte is locked");
-                            //        break;
-                            //    case 0xFF:
-                            //        MessageBox.Show("The byte can not be locked");
-                            //        break;
-                            //    default:
-                            //        break;
-                            //}
-                        }
+                    {
+                        //switch(m_curOperateTagISO18000Buffer.btStatus)
+                        //{
+                        //    case 0x00:
+                        //        MessageBox.Show("The byte successfully locked");
+                        //        break;
+                        //    case 0xFE:
+                        //        MessageBox.Show("Status of the byte is locked");
+                        //        break;
+                        //    case 0xFF:
+                        //        MessageBox.Show("The byte can not be locked");
+                        //        break;
+                        //    default:
+                        //        break;
+                        //}
+                    }
                         break;
                     case 0xb4:
+                    {
+                        switch (m_curOperateTagISO18000Buffer.btStatus)
                         {
-                            switch (m_curOperateTagISO18000Buffer.btStatus)
-                            {
-                                case 0x00:
-                                    txtStatus.Text = "This byte is not locked";
-                                    break;
-                                case 0xFE:
-                                    txtStatus.Text = "Status of the byte is locked";
-                                    break;
-                                default:
-                                    break;
-                            }
+                            case 0x00:
+                                txtStatus.Text = "This byte is not locked";
+                                break;
+                            case 0xFE:
+                                txtStatus.Text = "Status of the byte is locked";
+                                break;
                         }
-                        break;
-                    default:
+                    }
                         break;
                 }
             }
         }
 
-        private delegate void RunLoopISO18000Unsafe(int nLength);
         private void RunLoopISO18000(int nLength)
         {
-            if (this.InvokeRequired)
+            if (InvokeRequired)
             {
-                RunLoopISO18000Unsafe InvokeRunLoopISO18000 = new RunLoopISO18000Unsafe(RunLoopISO18000);
-                this.Invoke(InvokeRunLoopISO18000, new object[] { nLength });
+                var InvokeRunLoopISO18000 = new RunLoopISO18000Unsafe(RunLoopISO18000);
+                Invoke(InvokeRunLoopISO18000, nLength);
             }
             else
             {
@@ -1122,12 +1026,10 @@ namespace UHFDemo
                     m_nLoopedTimes++;
                     txtLoopTimes.Text = m_nLoopedTimes.ToString();
                 }
+
                 //Judge whether cycle is ended.
                 m_nLoopTimes--;
-                if (m_nLoopTimes > 0)
-                {
-                    WriteTagISO18000();
-                }
+                if (m_nLoopTimes > 0) WriteTagISO18000();
             }
         }
 
@@ -1141,11 +1043,8 @@ namespace UHFDemo
                 //Set button font color
                 btnConnectRs232.ForeColor = Color.Indigo;
                 SetButtonBold(btnConnectRs232);
-                if (btnConnectTcp.Font.Bold)
-                {
-                    SetButtonBold(btnConnectTcp);
-                }                
-                
+                if (btnConnectTcp.Font.Bold) SetButtonBold(btnConnectTcp);
+
                 gbTcpIp.Enabled = false;
             }
         }
@@ -1159,33 +1058,30 @@ namespace UHFDemo
 
                 //Set button font color
                 btnConnectTcp.ForeColor = Color.Indigo;
-                if (btnConnectRs232.Font.Bold)
-                {
-                    SetButtonBold(btnConnectRs232);
-                }                
+                if (btnConnectRs232.Font.Bold) SetButtonBold(btnConnectRs232);
                 SetButtonBold(btnConnectTcp);
-                
+
                 gbRS232.Enabled = false;
             }
         }
 
         private void SetButtonBold(Button btnBold)
         {
-            Font oldFont = btnBold.Font;
-            Font newFont = new Font(oldFont, oldFont.Style ^ FontStyle.Bold);
+            var oldFont = btnBold.Font;
+            var newFont = new Font(oldFont, oldFont.Style ^ FontStyle.Bold);
             btnBold.Font = newFont;
         }
 
         private void SetRadioButtonBold(CheckBox ckBold)
         {
-            Font oldFont = ckBold.Font;
-            Font newFont = new Font(oldFont, oldFont.Style ^ FontStyle.Bold);
+            var oldFont = ckBold.Font;
+            var newFont = new Font(oldFont, oldFont.Style ^ FontStyle.Bold);
             ckBold.Font = newFont;
         }
 
         private void SetFormEnable(bool bIsEnable)
         {
-            gbConnectType.Enabled = (!bIsEnable);
+            gbConnectType.Enabled = !bIsEnable;
             gbCmdReaderAddress.Enabled = bIsEnable;
             gbCmdVersion.Enabled = bIsEnable;
             gbCmdBaudrate.Enabled = bIsEnable;
@@ -1202,7 +1098,7 @@ namespace UHFDemo
 
             btnResetReader.Enabled = bIsEnable;
 
-           
+
             gbCmdOperateTag.Enabled = bIsEnable;
 
             btnInventoryISO18000.Enabled = bIsEnable;
@@ -1226,28 +1122,28 @@ namespace UHFDemo
         private void btnConnectRs232_Click(object sender, EventArgs e)
         {
             //Processing serial port to connect reader.
-            string strException = string.Empty;
-            string strComPort = cmbComPort.Text;
-            int nBaudrate=Convert.ToInt32(cmbBaudrate.Text);
+            var strException = string.Empty;
+            var strComPort = cmbComPort.Text;
+            var nBaudrate = Convert.ToInt32(cmbBaudrate.Text);
 
-            int nRet = reader.OpenCom(strComPort, nBaudrate, out strException);
+            var nRet = reader.OpenCom(strComPort, nBaudrate, out strException);
             if (nRet != 0)
             {
-                string strLog = "Connection failed, failure cause: " + strException; 
+                var strLog = "Connection failed, failure cause: " + strException;
                 WriteLog(lrtxtLog, strLog, 1);
 
                 return;
             }
             else
             {
-                string strLog = "Connect" + strComPort + "@" + nBaudrate.ToString();
+                var strLog = "Connect" + strComPort + "@" + nBaudrate;
                 WriteLog(lrtxtLog, strLog, 0);
             }
-            
+
             //Whether processing interface element is valid.
             SetFormEnable(true);
 
-            
+
             btnConnectRs232.Enabled = false;
             btnDisconnectRs232.Enabled = true;
 
@@ -1280,21 +1176,21 @@ namespace UHFDemo
             try
             {
                 //Processing Tcp to connect reader.
-                string strException = string.Empty;
-                IPAddress ipAddress = IPAddress.Parse(ipIpServer.IpAddressStr);
-                int nPort = Convert.ToInt32(txtTcpPort.Text);
+                var strException = string.Empty;
+                var ipAddress = IPAddress.Parse(ipIpServer.IpAddressStr);
+                var nPort = Convert.ToInt32(txtTcpPort.Text);
 
-                int nRet = reader.ConnectServer(ipAddress,nPort,out strException);
+                var nRet = reader.ConnectServer(ipAddress, nPort, out strException);
                 if (nRet != 0)
                 {
-                    string strLog = "Connection failed, failure cause: " + strException;
+                    var strLog = "Connection failed, failure cause: " + strException;
                     WriteLog(lrtxtLog, strLog, 1);
 
                     return;
                 }
                 else
                 {
-                    string strLog = "Connect" + ipIpServer.IpAddressStr + "@" + nPort.ToString();
+                    var strLog = "Connect" + ipIpServer.IpAddressStr + "@" + nPort;
                     WriteLog(lrtxtLog, strLog, 0);
                 }
 
@@ -1309,11 +1205,10 @@ namespace UHFDemo
                 SetButtonBold(btnConnectTcp);
                 SetButtonBold(btnDisconnectTcp);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-            
         }
 
         private void btnDisconnectTcp_Click(object sender, EventArgs e)
@@ -1335,15 +1230,15 @@ namespace UHFDemo
 
         private void btnResetReader_Click(object sender, EventArgs e)
         {
-            int nRet = reader.Reset(m_curSetting.btReadId);
+            var nRet = reader.Reset(m_curSetting.btReadId);
             if (nRet != 0)
             {
-                string strLog = "Reset reader fails";
+                var strLog = "Reset reader fails";
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                string strLog = "Reset reader";
+                var strLog = "Reset reader";
                 WriteLog(lrtxtLog, strLog, 0);
             }
         }
@@ -1354,22 +1249,21 @@ namespace UHFDemo
             {
                 if (htxtReadId.Text.Length != 0)
                 {
-                    string strTemp = htxtReadId.Text.Trim();
+                    var strTemp = htxtReadId.Text.Trim();
                     reader.SetReaderAddress(m_curSetting.btReadId, Convert.ToByte(strTemp, 16));
                     m_curSetting.btReadId = Convert.ToByte(strTemp, 16);
                 }
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-            
         }
 
-        private void ProcessSetReadAddress(Reader.MessageTran msgTran)
+        private void ProcessSetReadAddress(MessageTran msgTran)
         {
-            string strCmd = "Set reader's address";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set reader's address";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1380,17 +1274,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1399,10 +1291,10 @@ namespace UHFDemo
             reader.GetFirmwareVersion(m_curSetting.btReadId);
         }
 
-        private void ProcessGetFirmwareVersion(Reader.MessageTran msgTran)
+        private void ProcessGetFirmwareVersion(MessageTran msgTran)
         {
-            string strCmd = "Get Reader's firmware version";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get Reader's firmware version";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 2)
             {
@@ -1414,16 +1306,13 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            if (msgTran.AryData.Length == 1)
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
+            else
+                strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1433,13 +1322,13 @@ namespace UHFDemo
             {
                 reader.SetUartBaudrate(m_curSetting.btReadId, cmbSetBaudrate.SelectedIndex + 3);
                 m_curSetting.btIndexBaudrate = Convert.ToByte(cmbSetBaudrate.SelectedIndex);
-            }            
+            }
         }
 
-        private void ProcessSetUartBaudrate(Reader.MessageTran msgTran)
+        private void ProcessSetUartBaudrate(MessageTran msgTran)
         {
-            string strCmd = "Set Baudrate";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set Baudrate";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1450,17 +1339,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1469,10 +1356,10 @@ namespace UHFDemo
             reader.GetReaderTemperature(m_curSetting.btReadId);
         }
 
-        private void ProcessGetReaderTemperature(Reader.MessageTran msgTran)
+        private void ProcessGetReaderTemperature(MessageTran msgTran)
         {
-            string strCmd = "Get reader internal temperature";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get reader internal temperature";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 2)
             {
@@ -1484,16 +1371,13 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            if (msgTran.AryData.Length == 1)
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
+            else
+                strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1502,10 +1386,10 @@ namespace UHFDemo
             reader.GetOutputPower(m_curSetting.btReadId);
         }
 
-        private void ProcessGetOutputPower(Reader.MessageTran msgTran)
+        private void ProcessGetOutputPower(MessageTran msgTran)
         {
-            string strCmd = "Get RF Output Power";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get RF Output Power";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1516,12 +1400,10 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1535,17 +1417,16 @@ namespace UHFDemo
                     m_curSetting.btOutputPower = Convert.ToByte(txtOutputPower.Text);
                 }
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-            
         }
 
-        private void ProcessSetOutputPower(Reader.MessageTran msgTran)
+        private void ProcessSetOutputPower(MessageTran msgTran)
         {
-            string strCmd = "Set RF Output Power";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set RF Output Power";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1556,17 +1437,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1575,14 +1454,15 @@ namespace UHFDemo
             reader.GetWorkAntenna(m_curSetting.btReadId);
         }
 
-        private void ProcessGetWorkAntenna(Reader.MessageTran msgTran)
+        private void ProcessGetWorkAntenna(MessageTran msgTran)
         {
-            string strCmd = "Get working antenna";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get working antenna";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
-                if (msgTran.AryData[0] == 0x00 || msgTran.AryData[0] == 0x01 || msgTran.AryData[0] == 0x02 || msgTran.AryData[0] == 0x03)
+                if (msgTran.AryData[0] == 0x00 || msgTran.AryData[0] == 0x01 || msgTran.AryData[0] == 0x02 ||
+                    msgTran.AryData[0] == 0x03)
                 {
                     m_curSetting.btReadId = msgTran.ReadId;
                     m_curSetting.btWorkAntenna = msgTran.AryData[0];
@@ -1591,17 +1471,15 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1611,19 +1489,19 @@ namespace UHFDemo
             byte btWorkAntenna = 0xFF;
             if (cmbWorkAnt.SelectedIndex != -1)
             {
-                btWorkAntenna = (byte)cmbWorkAnt.SelectedIndex;
+                btWorkAntenna = (byte) cmbWorkAnt.SelectedIndex;
                 reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
                 m_curSetting.btWorkAntenna = btWorkAntenna;
             }
         }
 
-        private void ProcessSetWorkAntenna(Reader.MessageTran msgTran)
+        private void ProcessSetWorkAntenna(MessageTran msgTran)
         {
-            int intCurrentAnt = 0;
+            var intCurrentAnt = 0;
             intCurrentAnt = m_curSetting.btWorkAntenna + 1;
-            string strCmd = "Set working antenna successfully, Current Ant: Ant" + intCurrentAnt.ToString();
-         
-            string strErrorCode = string.Empty;
+            var strCmd = "Set working antenna successfully, Current Ant: Ant" + intCurrentAnt;
+
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1633,23 +1511,18 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
 
                     //Verify inventory operations
-                    if (m_bInventory)
-                    {
-                        RunLoopInventroy();
-                    }
+                    if (m_bInventory) RunLoopInventroy();
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
 
             if (m_bInventory)
@@ -1665,10 +1538,10 @@ namespace UHFDemo
             reader.GetDrmMode(m_curSetting.btReadId);
         }
 
-        private void ProcessGetDrmMode(Reader.MessageTran msgTran)
+        private void ProcessGetDrmMode(MessageTran msgTran)
         {
-            string strCmd = "Get DRM Status";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get DRM Status";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1681,17 +1554,15 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1700,26 +1571,20 @@ namespace UHFDemo
             byte btDrmMode = 0xFF;
 
             if (rdbDrmModeClose.Checked)
-            {
                 btDrmMode = 0x00;
-            }
             else if (rdbDrmModeOpen.Checked)
-            {
                 btDrmMode = 0x01;
-            }
             else
-            {
                 return;
-            }
 
             reader.SetDrmMode(m_curSetting.btReadId, btDrmMode);
             m_curSetting.btDrmMode = btDrmMode;
         }
 
-        private void ProcessSetDrmMode(Reader.MessageTran msgTran)
+        private void ProcessSetDrmMode(MessageTran msgTran)
         {
-            string strCmd = "Set DRM Status";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set DRM Status";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1730,17 +1595,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1751,10 +1614,10 @@ namespace UHFDemo
             cmbFrequencyStart.Items.Clear();
             cmbFrequencyEnd.Items.Clear();
 
-            float nStart = 902.00f;
-            for (int nloop = 0; nloop < 53; nloop++)
+            var nStart = 902.00f;
+            for (var nloop = 0; nloop < 53; nloop++)
             {
-                string strTemp = nStart.ToString("0.00");
+                var strTemp = nStart.ToString("0.00");
                 cmbFrequencyStart.Items.Add(strTemp);
                 cmbFrequencyEnd.Items.Add(strTemp);
 
@@ -1769,10 +1632,10 @@ namespace UHFDemo
             cmbFrequencyStart.Items.Clear();
             cmbFrequencyEnd.Items.Clear();
 
-            float nStart = 865.00f;
-            for (int nloop = 0; nloop < 7; nloop++)
+            var nStart = 865.00f;
+            for (var nloop = 0; nloop < 7; nloop++)
             {
-                string strTemp = nStart.ToString("0.00");
+                var strTemp = nStart.ToString("0.00");
                 cmbFrequencyStart.Items.Add(strTemp);
                 cmbFrequencyEnd.Items.Add(strTemp);
 
@@ -1787,10 +1650,10 @@ namespace UHFDemo
             cmbFrequencyStart.Items.Clear();
             cmbFrequencyEnd.Items.Clear();
 
-            float nStart = 920.00f;
-            for (int nloop = 0; nloop < 11; nloop++)
+            var nStart = 920.00f;
+            for (var nloop = 0; nloop < 11; nloop++)
             {
-                string strTemp = nStart.ToString("0.00");
+                var strTemp = nStart.ToString("0.00");
                 cmbFrequencyStart.Items.Add(strTemp);
                 cmbFrequencyEnd.Items.Add(strTemp);
 
@@ -1800,34 +1663,32 @@ namespace UHFDemo
 
         private string GetFreqString(byte btFreq)
         {
-            string strFreq = string.Empty;
+            var strFreq = string.Empty;
 
             if (m_curSetting.btRegion == 4)
             {
                 float nExtraFrequency = btFreq * m_curSetting.btUserDefineFrequencyInterval * 10;
-                float nstartFrequency = ((float)m_curSetting.nUserDefineStartFrequency) / 1000;
-                float nStart = nstartFrequency + nExtraFrequency / 1000;
-                string strTemp = nStart.ToString("0.000");
+                var nstartFrequency = (float) m_curSetting.nUserDefineStartFrequency / 1000;
+                var nStart = nstartFrequency + nExtraFrequency / 1000;
+                var strTemp = nStart.ToString("0.000");
+                return strTemp;
+            }
+
+            if (btFreq < 0x07)
+            {
+                var nStart = 865.00f + Convert.ToInt32(btFreq) * 0.5f;
+
+                var strTemp = nStart.ToString("0.00");
+
                 return strTemp;
             }
             else
             {
-                if (btFreq < 0x07)
-                {
-                    float nStart = 865.00f + Convert.ToInt32(btFreq) * 0.5f;
+                var nStart = 902.00f + (Convert.ToInt32(btFreq) - 7) * 0.5f;
 
-                    string strTemp = nStart.ToString("0.00");
+                var strTemp = nStart.ToString("0.00");
 
-                    return strTemp;
-                }
-                else
-                {
-                    float nStart = 902.00f + (Convert.ToInt32(btFreq) - 7) * 0.5f;
-
-                    string strTemp = nStart.ToString("0.00");
-
-                    return strTemp;
-                }
+                return strTemp;
             }
         }
 
@@ -1836,10 +1697,10 @@ namespace UHFDemo
             reader.GetFrequencyRegion(m_curSetting.btReadId);
         }
 
-        private void ProcessGetFrequencyRegion(Reader.MessageTran msgTran)
+        private void ProcessGetFrequencyRegion(MessageTran msgTran)
         {
-            string strCmd = "Query RF frequency spectrum";
-            string strErrorCode = string.Empty;
+            var strCmd = "Query RF frequency spectrum";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 3)
             {
@@ -1852,29 +1713,26 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else if (msgTran.AryData.Length == 6)
+
+            if (msgTran.AryData.Length == 6)
             {
                 m_curSetting.btReadId = msgTran.ReadId;
                 m_curSetting.btRegion = msgTran.AryData[0];
                 m_curSetting.btUserDefineFrequencyInterval = msgTran.AryData[1];
                 m_curSetting.btUserDefineChannelQuantity = msgTran.AryData[2];
-                m_curSetting.nUserDefineStartFrequency = msgTran.AryData[3] * 256 * 256 + msgTran.AryData[4] * 256 + msgTran.AryData[5];
+                m_curSetting.nUserDefineStartFrequency =
+                    msgTran.AryData[3] * 256 * 256 + msgTran.AryData[4] * 256 + msgTran.AryData[5];
                 RefreshReadSetting(0x79);
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
-                
-
             }
-            else if (msgTran.AryData.Length == 1)
-            {
+
+            if (msgTran.AryData.Length == 1)
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
             else
-            {
                 strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1882,16 +1740,17 @@ namespace UHFDemo
         {
             try
             {
-                if (cbUserDefineFreq.Checked == true)
+                if (cbUserDefineFreq.Checked)
                 {
-                    int nStartFrequency = Convert.ToInt32(textStartFreq.Text);
-                    int nFrequencyInterval = Convert.ToInt32(TextFreqInterval.Text);
+                    var nStartFrequency = Convert.ToInt32(textStartFreq.Text);
+                    var nFrequencyInterval = Convert.ToInt32(TextFreqInterval.Text);
                     nFrequencyInterval = nFrequencyInterval / 10;
-                    byte btChannelQuantity = Convert.ToByte(textFreqQuantity.Text);
-                    reader.SetUserDefineFrequency(m_curSetting.btReadId, nStartFrequency, (byte)nFrequencyInterval, btChannelQuantity);
+                    var btChannelQuantity = Convert.ToByte(textFreqQuantity.Text);
+                    reader.SetUserDefineFrequency(m_curSetting.btReadId, nStartFrequency, (byte) nFrequencyInterval,
+                        btChannelQuantity);
                     m_curSetting.btRegion = 4;
                     m_curSetting.nUserDefineStartFrequency = nStartFrequency;
-                    m_curSetting.btUserDefineFrequencyInterval = (byte)nFrequencyInterval;
+                    m_curSetting.btUserDefineFrequencyInterval = (byte) nFrequencyInterval;
                     m_curSetting.btUserDefineChannelQuantity = btChannelQuantity;
                 }
                 else
@@ -1900,11 +1759,12 @@ namespace UHFDemo
                     byte btStartFreq = 0x00;
                     byte btEndFreq = 0x00;
 
-                    int nStartIndex = cmbFrequencyStart.SelectedIndex;
-                    int nEndIndex = cmbFrequencyEnd.SelectedIndex;
+                    var nStartIndex = cmbFrequencyStart.SelectedIndex;
+                    var nEndIndex = cmbFrequencyEnd.SelectedIndex;
                     if (nEndIndex < nStartIndex)
                     {
-                        MessageBox.Show("Spectral range that does not meet specifications, please refer to the Serial Protocol");
+                        MessageBox.Show(
+                            "Spectral range that does not meet specifications, please refer to the Serial Protocol");
                         return;
                     }
 
@@ -1937,16 +1797,16 @@ namespace UHFDemo
                     m_curSetting.btFrequencyEnd = btEndFreq;
                 }
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
         }
 
-        private void ProcessSetFrequencyRegion(Reader.MessageTran msgTran)
+        private void ProcessSetFrequencyRegion(MessageTran msgTran)
         {
-            string strCmd = "Set RF frequency spectrum";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set RF frequency spectrum";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -1957,17 +1817,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -1976,30 +1834,22 @@ namespace UHFDemo
             byte btBeeperMode = 0xFF;
 
             if (rdbBeeperModeSlient.Checked)
-            {
                 btBeeperMode = 0x00;
-            }
             else if (rdbBeeperModeInventory.Checked)
-            {
                 btBeeperMode = 0x01;
-            }
             else if (rdbBeeperModeTag.Checked)
-            {
                 btBeeperMode = 0x02;
-            }
             else
-            {
                 return;
-            }
 
             reader.SetBeeperMode(m_curSetting.btReadId, btBeeperMode);
             m_curSetting.btBeeperMode = btBeeperMode;
         }
 
-        private void ProcessSetBeeperMode(Reader.MessageTran msgTran)
+        private void ProcessSetBeeperMode(MessageTran msgTran)
         {
-            string strCmd = "Set reader's buzzer hehavior";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set reader's buzzer hehavior";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2010,17 +1860,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -2029,10 +1877,10 @@ namespace UHFDemo
             reader.ReadGpioValue(m_curSetting.btReadId);
         }
 
-        private void ProcessReadGpioValue(Reader.MessageTran msgTran)
+        private void ProcessReadGpioValue(MessageTran msgTran)
         {
-            string strCmd = "Get GPIO status";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get GPIO status";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 2)
             {
@@ -2044,16 +1892,13 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            if (msgTran.AryData.Length == 1)
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
+            else
+                strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -2062,17 +1907,11 @@ namespace UHFDemo
             byte btGpioValue = 0xFF;
 
             if (rdbGpio3Low.Checked)
-            {
                 btGpioValue = 0x00;
-            }
             else if (rdbGpio3High.Checked)
-            {
                 btGpioValue = 0x01;
-            }
             else
-            {
                 return;
-            }
 
             reader.WriteGpioValue(m_curSetting.btReadId, 0x03, btGpioValue);
             m_curSetting.btGpio3Value = btGpioValue;
@@ -2083,26 +1922,20 @@ namespace UHFDemo
             byte btGpioValue = 0xFF;
 
             if (rdbGpio4Low.Checked)
-            {
                 btGpioValue = 0x00;
-            }
             else if (rdbGpio4High.Checked)
-            {
                 btGpioValue = 0x01;
-            }
             else
-            {
                 return;
-            }
 
             reader.WriteGpioValue(m_curSetting.btReadId, 0x04, btGpioValue);
             m_curSetting.btGpio4Value = btGpioValue;
         }
 
-        private void ProcessWriteGpioValue(Reader.MessageTran msgTran)
+        private void ProcessWriteGpioValue(MessageTran msgTran)
         {
-            string strCmd = "Set GPIO status";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set GPIO status";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2113,17 +1946,15 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -2132,33 +1963,31 @@ namespace UHFDemo
             reader.GetAntDetector(m_curSetting.btReadId);
         }
 
-        private void ProcessGetAntDetector(Reader.MessageTran msgTran)
+        private void ProcessGetAntDetector(MessageTran msgTran)
         {
-            string strCmd = "Get antenna detector threshold value";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get antenna detector threshold value";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 m_curSetting.btReadId = msgTran.ReadId;
                 m_curSetting.btAntDetector = msgTran.AryData[0];
-                
+
                 RefreshReadSetting(0x63);
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        private void ProcessGetMonzaStatus(Reader.MessageTran msgTran)
+        private void ProcessGetMonzaStatus(MessageTran msgTran)
         {
-            string strCmd = "Get current Impinj FastTID setting";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get current Impinj FastTID setting";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2171,24 +2000,22 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        private void ProcessSetMonzaStatus(Reader.MessageTran msgTran)
+        private void ProcessSetMonzaStatus(MessageTran msgTran)
         {
-            string strCmd = "Set Impinj FastTID function";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set Impinj FastTID function";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2200,24 +2027,22 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        private void ProcessSetProfile(Reader.MessageTran msgTran)
+        private void ProcessSetProfile(MessageTran msgTran)
         {
-            string strCmd = "Set RF link profile";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set RF link profile";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2229,28 +2054,26 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        private void ProcessGetProfile(Reader.MessageTran msgTran)
+        private void ProcessGetProfile(MessageTran msgTran)
         {
-            string strCmd = "Get RF link profile";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get RF link profile";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
-                if ((msgTran.AryData[0] >= 0xd0) && (msgTran.AryData[0] <= 0xd3))
+                if (msgTran.AryData[0] >= 0xd0 && msgTran.AryData[0] <= 0xd3)
                 {
                     m_curSetting.btReadId = msgTran.ReadId;
                     m_curSetting.btLinkProfile = msgTran.AryData[0];
@@ -2259,85 +2082,73 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
 
-
-        private void ProcessGetReaderIdentifier(Reader.MessageTran msgTran)
+        private void ProcessGetReaderIdentifier(MessageTran msgTran)
         {
-            string strCmd = "Get Reader Identifier";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get Reader Identifier";
+            var strErrorCode = string.Empty;
             short i;
-            string readerIdentifier = "";
-            
+            var readerIdentifier = "";
+
             if (msgTran.AryData.Length == 12)
             {
                 m_curSetting.btReadId = msgTran.ReadId;
-                for (i = 0; i < 12; i ++)
-                {
+                for (i = 0; i < 12; i++)
                     readerIdentifier = readerIdentifier + string.Format("{0:X2}", msgTran.AryData[i]) + " ";
-
-                    
-                }
                 m_curSetting.btReaderIdentifier = readerIdentifier;
                 RefreshReadSetting(0x68);
-                
+
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        private void ProcessGetImpedanceMatch(Reader.MessageTran msgTran)
+        private void ProcessGetImpedanceMatch(MessageTran msgTran)
         {
-            string strCmd = "Measure Impedance of Antenna Port Match";
-            string strErrorCode = string.Empty;
-                  
-            
+            var strCmd = "Measure Impedance of Antenna Port Match";
+            var strErrorCode = string.Empty;
+
+
             if (msgTran.AryData.Length == 1)
             {
                 m_curSetting.btReadId = msgTran.ReadId;
 
                 m_curSetting.btAntImpedance = msgTran.AryData[0];
                 RefreshReadSetting(0x7E);
-                
+
                 WriteLog(lrtxtLog, strCmd, 0);
                 return;
             }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
-        
 
-        private void ProcessSetReaderIdentifier(Reader.MessageTran msgTran)
+        private void ProcessSetReaderIdentifier(MessageTran msgTran)
         {
-            string strCmd = "Set Reader Identifier";
-            string strErrorCode = string.Empty;
-            
+            var strCmd = "Set Reader Identifier";
+            var strErrorCode = string.Empty;
+
             if (msgTran.AryData.Length == 1)
             {
                 if (msgTran.AryData[0] == 0x10)
@@ -2352,7 +2163,7 @@ namespace UHFDemo
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
 
@@ -2367,17 +2178,16 @@ namespace UHFDemo
                     m_curSetting.btAntDetector = Convert.ToByte(tbAntDectector.Text);
                 }
             }
-             catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-
         }
 
-        private void ProcessSetAntDetector(Reader.MessageTran msgTran)
+        private void ProcessSetAntDetector(MessageTran msgTran)
         {
-            string strCmd = "Set antenna detector threshold value";
-            string strErrorCode = string.Empty;
+            var strCmd = "Set antenna detector threshold value";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -2388,38 +2198,32 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
         }
-        
+
         private void rdbInventoryTag_CheckedChanged(object sender, EventArgs e)
         {
-           
         }
 
         private void rdbOperateTag_CheckedChanged(object sender, EventArgs e)
         {
-            
         }
 
         private void rdbInventoryRealTag_CheckedChanged(object sender, EventArgs e)
         {
-            
         }
 
         private void rbdFastSwitchInventory_CheckedChanged(object sender, EventArgs e)
         {
-            
         }
 
         private void btnInventory_Click(object sender, EventArgs e)
@@ -2606,18 +2410,18 @@ namespace UHFDemo
             catch (System.Exception ex)
             {
                 MessageBox.Show(ex.Message);
-            }     */       
+            }     */
         }
 
-        private void ProcessFastSwitch(Reader.MessageTran msgTran)
+        private void ProcessFastSwitch(MessageTran msgTran)
         {
-            string strCmd = "Real time inventory with fast ant switch";
-            string strErrorCode = string.Empty;
+            var strCmd = "Real time inventory with fast ant switch";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
                 RefreshFastSwitch(0x01);
@@ -2626,15 +2430,19 @@ namespace UHFDemo
             else if (msgTran.AryData.Length == 2)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[1]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode + "--" + "Antenna" + (msgTran.AryData[0] + 1);
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode + "--" + "Antenna" +
+                             (msgTran.AryData[0] + 1);
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
 
             else if (msgTran.AryData.Length == 7)
             {
-                m_nSwitchTotal = Convert.ToInt32(msgTran.AryData[0]) * 255 * 255  + Convert.ToInt32(msgTran.AryData[1]) * 255  + Convert.ToInt32(msgTran.AryData[2]);
-                m_nSwitchTime = Convert.ToInt32(msgTran.AryData[3]) * 255 * 255 * 255 + Convert.ToInt32(msgTran.AryData[4]) * 255 * 255 + Convert.ToInt32(msgTran.AryData[5]) * 255 + Convert.ToInt32(msgTran.AryData[6]);
+                m_nSwitchTotal = Convert.ToInt32(msgTran.AryData[0]) * 255 * 255 +
+                                 Convert.ToInt32(msgTran.AryData[1]) * 255 + Convert.ToInt32(msgTran.AryData[2]);
+                m_nSwitchTime = Convert.ToInt32(msgTran.AryData[3]) * 255 * 255 * 255 +
+                                Convert.ToInt32(msgTran.AryData[4]) * 255 * 255 +
+                                Convert.ToInt32(msgTran.AryData[5]) * 255 + Convert.ToInt32(msgTran.AryData[6]);
 
                 m_curInventoryBuffer.nDataCount = m_nSwitchTotal;
                 m_curInventoryBuffer.nCommandDuration = m_nSwitchTime;
@@ -2642,7 +2450,6 @@ namespace UHFDemo
                 RefreshFastSwitch(0x02);
                 RunLoopFastSwitch();
             }
-
             /*else if (msgTran.AryData.Length == 8)
             {
                 
@@ -2658,26 +2465,26 @@ namespace UHFDemo
             else
             {
                 m_nTotal++;
-                int nLength = msgTran.AryData.Length;
-                int nEpcLength = nLength - 4;
+                var nLength = msgTran.AryData.Length;
+                var nEpcLength = nLength - 4;
 
                 //Add inventory list
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, nEpcLength);                
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 2);
-                string strRSSI = msgTran.AryData[nLength - 1].ToString();
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, nEpcLength);
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 2);
+                var strRSSI = msgTran.AryData[nLength - 1].ToString();
                 SetMaxMinRSSI(Convert.ToInt32(msgTran.AryData[nLength - 1]));
-                byte btTemp = msgTran.AryData[0];
-                byte btAntId = (byte)((btTemp & 0x03) + 1);
-                m_curInventoryBuffer.nCurrentAnt = (int)btAntId;
-                string strAntId = btAntId.ToString();
-                byte btFreq = (byte)(btTemp >> 2);
-                
-                string strFreq = GetFreqString(btFreq);
+                var btTemp = msgTran.AryData[0];
+                var btAntId = (byte) ((btTemp & 0x03) + 1);
+                m_curInventoryBuffer.nCurrentAnt = btAntId;
+                var strAntId = btAntId.ToString();
+                var btFreq = (byte) (btTemp >> 2);
 
-                DataRow[] drs = m_curInventoryBuffer.dtTagTable.Select(string.Format("COLEPC = '{0}'", strEPC));
+                var strFreq = GetFreqString(btFreq);
+
+                var drs = m_curInventoryBuffer.dtTagTable.Select(string.Format("COLEPC = '{0}'", strEPC));
                 if (drs.Length == 0)
                 {
-                    DataRow row1 = m_curInventoryBuffer.dtTagTable.NewRow();
+                    var row1 = m_curInventoryBuffer.dtTagTable.NewRow();
                     row1[0] = strPC;
                     row1[2] = strEPC;
                     row1[4] = strRSSI;
@@ -2687,29 +2494,27 @@ namespace UHFDemo
                     row1[8] = "0";
                     row1[9] = "0";
                     row1[10] = "0";
-                    switch(btAntId)
+                    switch (btAntId)
                     {
                         case 0x01:
-                            {
-                                row1[7] = "1";
-                            }
+                        {
+                            row1[7] = "1";
+                        }
                             break;
                         case 0x02:
-                            {
-                                row1[8] = "1";
-                            }
+                        {
+                            row1[8] = "1";
+                        }
                             break;
                         case 0x03:
-                            {
-                                row1[9] = "1";
-                            }
+                        {
+                            row1[9] = "1";
+                        }
                             break;
                         case 0x04:
-                            {
-                                row1[10] = "1";
-                            }
-                            break;
-                        default:
+                        {
+                            row1[10] = "1";
+                        }
                             break;
                     }
 
@@ -2718,10 +2523,10 @@ namespace UHFDemo
                 }
                 else
                 {
-                    foreach (DataRow dr in drs)
+                    foreach (var dr in drs)
                     {
                         dr.BeginEdit();
-                        int nTemp = 0;
+                        var nTemp = 0;
 
                         dr[4] = strRSSI;
                         //dr[5] = (Convert.ToInt32(dr[5]) + 1).ToString();
@@ -2729,68 +2534,60 @@ namespace UHFDemo
                         dr[5] = (nTemp + 1).ToString();
                         dr[6] = strFreq;
 
-                        switch(btAntId)
+                        switch (btAntId)
                         {
                             case 0x01:
-                                {
-                                    //dr[7] = (Convert.ToInt32(dr[7]) + 1).ToString();
-                                    nTemp = Convert.ToInt32(dr[7]);
-                                    dr[7] = (nTemp + 1).ToString();
-                                }
+                            {
+                                //dr[7] = (Convert.ToInt32(dr[7]) + 1).ToString();
+                                nTemp = Convert.ToInt32(dr[7]);
+                                dr[7] = (nTemp + 1).ToString();
+                            }
                                 break;
                             case 0x02:
-                                {
-                                    //dr[8] = (Convert.ToInt32(dr[8]) + 1).ToString();
-                                    nTemp = Convert.ToInt32(dr[8]);
-                                    dr[8] = (nTemp + 1).ToString();
-                                }
+                            {
+                                //dr[8] = (Convert.ToInt32(dr[8]) + 1).ToString();
+                                nTemp = Convert.ToInt32(dr[8]);
+                                dr[8] = (nTemp + 1).ToString();
+                            }
                                 break;
                             case 0x03:
-                                {
-                                    //dr[9] = (Convert.ToInt32(dr[9]) + 1).ToString();
-                                    nTemp = Convert.ToInt32(dr[9]);
-                                    dr[9] = (nTemp + 1).ToString();
-                                }
+                            {
+                                //dr[9] = (Convert.ToInt32(dr[9]) + 1).ToString();
+                                nTemp = Convert.ToInt32(dr[9]);
+                                dr[9] = (nTemp + 1).ToString();
+                            }
                                 break;
                             case 0x04:
-                                {
-                                    //dr[10] = (Convert.ToInt32(dr[10]) + 1).ToString();
-                                    nTemp = Convert.ToInt32(dr[10]);
-                                    dr[10] = (nTemp + 1).ToString();
-                                }
-                                break;
-                            default:
+                            {
+                                //dr[10] = (Convert.ToInt32(dr[10]) + 1).ToString();
+                                nTemp = Convert.ToInt32(dr[10]);
+                                dr[10] = (nTemp + 1).ToString();
+                            }
                                 break;
                         }
 
                         dr.EndEdit();
                     }
+
                     m_curInventoryBuffer.dtTagTable.AcceptChanges();
                 }
 
                 m_curInventoryBuffer.dtEndInventory = DateTime.Now;
                 RefreshFastSwitch(0x00);
             }
-
         }
 
-        private void ProcessInventoryReal(Reader.MessageTran msgTran)
+        private void ProcessInventoryReal(MessageTran msgTran)
         {
-            string strCmd = "";
-            if (msgTran.Cmd == 0x89)
-            {
-                strCmd = "Real time inventory";
-            }
-            if (msgTran.Cmd == 0x8B)
-            {
-                strCmd = "User define Session and Inventoried Flag inventory";
-            }
-            string strErrorCode = string.Empty;
+            var strCmd = "";
+            if (msgTran.Cmd == 0x89) strCmd = "Real time inventory";
+            if (msgTran.Cmd == 0x8B) strCmd = "User define Session and Inventoried Flag inventory";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
                 RefreshInventoryReal(0x00);
@@ -2798,8 +2595,12 @@ namespace UHFDemo
             }
             else if (msgTran.AryData.Length == 7)
             {
-                m_curInventoryBuffer.nReadRate = Convert.ToInt32(msgTran.AryData[1]) * 256 + Convert.ToInt32(msgTran.AryData[2]);
-                m_curInventoryBuffer.nDataCount = Convert.ToInt32(msgTran.AryData[3]) * 256 * 256 * 256 + Convert.ToInt32(msgTran.AryData[4]) * 256 * 256 + Convert.ToInt32(msgTran.AryData[5]) * 256 + Convert.ToInt32(msgTran.AryData[6]);
+                m_curInventoryBuffer.nReadRate =
+                    Convert.ToInt32(msgTran.AryData[1]) * 256 + Convert.ToInt32(msgTran.AryData[2]);
+                m_curInventoryBuffer.nDataCount = Convert.ToInt32(msgTran.AryData[3]) * 256 * 256 * 256 +
+                                                  Convert.ToInt32(msgTran.AryData[4]) * 256 * 256 +
+                                                  Convert.ToInt32(msgTran.AryData[5]) * 256 +
+                                                  Convert.ToInt32(msgTran.AryData[6]);
 
                 WriteLog(lrtxtLog, strCmd, 0);
                 RefreshInventoryReal(0x01);
@@ -2808,26 +2609,26 @@ namespace UHFDemo
             else
             {
                 m_nTotal++;
-                int nLength = msgTran.AryData.Length;
-                int nEpcLength = nLength - 4;
+                var nLength = msgTran.AryData.Length;
+                var nEpcLength = nLength - 4;
 
                 //Add inventory list
                 //if (msgTran.AryData[3] == 0x00)
                 //{
                 //    MessageBox.Show("");
                 //}
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, nEpcLength);
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 2);
-                string strRSSI = msgTran.AryData[nLength - 1].ToString();
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, nEpcLength);
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 2);
+                var strRSSI = msgTran.AryData[nLength - 1].ToString();
                 SetMaxMinRSSI(Convert.ToInt32(msgTran.AryData[nLength - 1]));
-                byte btTemp = msgTran.AryData[0];
-                byte btAntId = (byte)((btTemp & 0x03) + 1);
+                var btTemp = msgTran.AryData[0];
+                var btAntId = (byte) ((btTemp & 0x03) + 1);
                 m_curInventoryBuffer.nCurrentAnt = btAntId;
-                string strAntId = btAntId.ToString();
-            
-                byte btFreq = (byte)(btTemp >> 2);
-                string strFreq = GetFreqString(btFreq);
-                
+                var strAntId = btAntId.ToString();
+
+                var btFreq = (byte) (btTemp >> 2);
+                var strFreq = GetFreqString(btFreq);
+
                 //DataRow row = m_curInventoryBuffer.dtTagDetailTable.NewRow();
                 //row[0] = strEPC;
                 //row[1] = strRSSI;
@@ -2840,10 +2641,10 @@ namespace UHFDemo
                 ////Add tag list
                 //DataRow[] drsDetail = m_curInventoryBuffer.dtTagDetailTable.Select(string.Format("COLEPC = '{0}'", strEPC));
                 //int nDetailCount = drsDetail.Length;
-                DataRow[] drs = m_curInventoryBuffer.dtTagTable.Select(string.Format("COLEPC = '{0}'", strEPC));
+                var drs = m_curInventoryBuffer.dtTagTable.Select(string.Format("COLEPC = '{0}'", strEPC));
                 if (drs.Length == 0)
                 {
-                    DataRow row1 = m_curInventoryBuffer.dtTagTable.NewRow();
+                    var row1 = m_curInventoryBuffer.dtTagTable.NewRow();
                     row1[0] = strPC;
                     row1[2] = strEPC;
                     row1[4] = strRSSI;
@@ -2855,7 +2656,7 @@ namespace UHFDemo
                 }
                 else
                 {
-                    foreach (DataRow dr in drs)
+                    foreach (var dr in drs)
                     {
                         dr.BeginEdit();
 
@@ -2863,8 +2664,9 @@ namespace UHFDemo
                         dr[5] = (Convert.ToInt32(dr[5]) + 1).ToString();
                         dr[6] = strFreq;
 
-                        dr.EndEdit();                       
+                        dr.EndEdit();
                     }
+
                     m_curInventoryBuffer.dtTagTable.AcceptChanges();
                 }
 
@@ -2873,22 +2675,23 @@ namespace UHFDemo
             }
         }
 
-      
 
-        private void ProcessInventory(Reader.MessageTran msgTran)
+        private void ProcessInventory(MessageTran msgTran)
         {
-            string strCmd = "Inventory";
-            string strErrorCode = string.Empty;
+            var strCmd = "Inventory";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 9)
             {
                 m_curInventoryBuffer.nCurrentAnt = msgTran.AryData[0];
-                m_curInventoryBuffer.nTagCount = Convert.ToInt32(msgTran.AryData[1]) * 256 + Convert.ToInt32(msgTran.AryData[2]);
-                m_curInventoryBuffer.nReadRate = Convert.ToInt32(msgTran.AryData[3]) * 256 + Convert.ToInt32(msgTran.AryData[4]);
-                int nTotalRead = Convert.ToInt32(msgTran.AryData[5]) * 256 * 256 * 256
-                    + Convert.ToInt32(msgTran.AryData[6]) * 256 * 256
-                    + Convert.ToInt32(msgTran.AryData[7]) * 256
-                    + Convert.ToInt32(msgTran.AryData[8]);
+                m_curInventoryBuffer.nTagCount =
+                    Convert.ToInt32(msgTran.AryData[1]) * 256 + Convert.ToInt32(msgTran.AryData[2]);
+                m_curInventoryBuffer.nReadRate =
+                    Convert.ToInt32(msgTran.AryData[3]) * 256 + Convert.ToInt32(msgTran.AryData[4]);
+                var nTotalRead = Convert.ToInt32(msgTran.AryData[5]) * 256 * 256 * 256
+                                 + Convert.ToInt32(msgTran.AryData[6]) * 256 * 256
+                                 + Convert.ToInt32(msgTran.AryData[7]) * 256
+                                 + Convert.ToInt32(msgTran.AryData[8]);
                 m_curInventoryBuffer.nDataCount = nTotalRead;
                 m_curInventoryBuffer.lTotalRead.Add(nTotalRead);
                 m_curInventoryBuffer.dtEndInventory = DateTime.Now;
@@ -2900,16 +2703,13 @@ namespace UHFDemo
 
                 return;
             }
-            else if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            if (msgTran.AryData.Length == 1)
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
+            else
+                strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
             WriteLog(lrtxtLog, strLog, 1);
 
             RunLoopInventroy();
@@ -2918,55 +2718,47 @@ namespace UHFDemo
         private void btnGetInventoryBuffer_Click(object sender, EventArgs e)
         {
             m_curInventoryBuffer.dtTagTable.Rows.Clear();
-            
+
             reader.GetInventoryBuffer(m_curSetting.btReadId);
         }
 
         private void SetMaxMinRSSI(int nRSSI)
         {
-            if (m_curInventoryBuffer.nMaxRSSI < nRSSI)
-            {
-                m_curInventoryBuffer.nMaxRSSI = nRSSI;
-            }
+            if (m_curInventoryBuffer.nMaxRSSI < nRSSI) m_curInventoryBuffer.nMaxRSSI = nRSSI;
 
             if (m_curInventoryBuffer.nMinRSSI == 0)
-            {
                 m_curInventoryBuffer.nMinRSSI = nRSSI;
-            }
-            else if (m_curInventoryBuffer.nMinRSSI > nRSSI)
-            {
-                m_curInventoryBuffer.nMinRSSI = nRSSI;
-            }
+            else if (m_curInventoryBuffer.nMinRSSI > nRSSI) m_curInventoryBuffer.nMinRSSI = nRSSI;
         }
 
-        private void ProcessGetInventoryBuffer(Reader.MessageTran msgTran)
+        private void ProcessGetInventoryBuffer(MessageTran msgTran)
         {
-            string strCmd = "Get buffered data without clearing";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get buffered data without clearing";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nDataLen = msgTran.AryData.Length;
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
+                var nDataLen = msgTran.AryData.Length;
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEpc = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strRSSI = msgTran.AryData[nDataLen - 3].ToString();
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEpc = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strRSSI = msgTran.AryData[nDataLen - 3].ToString();
                 SetMaxMinRSSI(Convert.ToInt32(msgTran.AryData[nDataLen - 3]));
-                byte btTemp = msgTran.AryData[nDataLen - 2];
-                byte btAntId = (byte)((btTemp & 0x03) + 1);
-                string strAntId = btAntId.ToString();
-                string strReadCnr = msgTran.AryData[nDataLen - 1].ToString();
+                var btTemp = msgTran.AryData[nDataLen - 2];
+                var btAntId = (byte) ((btTemp & 0x03) + 1);
+                var strAntId = btAntId.ToString();
+                var strReadCnr = msgTran.AryData[nDataLen - 1].ToString();
 
-                DataRow row = m_curInventoryBuffer.dtTagTable.NewRow();
+                var row = m_curInventoryBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEpc;
@@ -2985,38 +2777,38 @@ namespace UHFDemo
         private void btnGetAndResetInventoryBuffer_Click(object sender, EventArgs e)
         {
             m_curInventoryBuffer.dtTagTable.Rows.Clear();
-            
+
             reader.GetAndResetInventoryBuffer(m_curSetting.btReadId);
         }
 
-        private void ProcessGetAndResetInventoryBuffer(Reader.MessageTran msgTran)
+        private void ProcessGetAndResetInventoryBuffer(MessageTran msgTran)
         {
-            string strCmd = "Get and clear buffered data";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get and clear buffered data";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nDataLen = msgTran.AryData.Length;
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
+                var nDataLen = msgTran.AryData.Length;
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEpc = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strRSSI = msgTran.AryData[nDataLen - 3].ToString();
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEpc = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strRSSI = msgTran.AryData[nDataLen - 3].ToString();
                 SetMaxMinRSSI(Convert.ToInt32(msgTran.AryData[nDataLen - 3]));
-                byte btTemp = msgTran.AryData[nDataLen - 2];
-                byte btAntId = (byte)((btTemp & 0x03) + 1);
-                string strAntId = btAntId.ToString();
-                string strReadCnr = msgTran.AryData[nDataLen - 1].ToString();
+                var btTemp = msgTran.AryData[nDataLen - 2];
+                var btAntId = (byte) ((btTemp & 0x03) + 1);
+                var strAntId = btAntId.ToString();
+                var strReadCnr = msgTran.AryData[nDataLen - 1].ToString();
 
-                DataRow row = m_curInventoryBuffer.dtTagTable.NewRow();
+                var row = m_curInventoryBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEpc;
@@ -3031,36 +2823,34 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strCmd, 0);
             }
         }
-        
+
         private void btnGetInventoryBufferTagCount_Click(object sender, EventArgs e)
         {
             reader.GetInventoryBufferTagCount(m_curSetting.btReadId);
         }
 
-        private void ProcessGetInventoryBufferTagCount(Reader.MessageTran msgTran)
+        private void ProcessGetInventoryBufferTagCount(MessageTran msgTran)
         {
-            string strCmd = "Query how many tags are buffered";
-            string strErrorCode = string.Empty;
+            var strCmd = "Query how many tags are buffered";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 2)
             {
-                m_curInventoryBuffer.nTagCount = Convert.ToInt32(msgTran.AryData[0]) * 256 + Convert.ToInt32(msgTran.AryData[1]);
+                m_curInventoryBuffer.nTagCount =
+                    Convert.ToInt32(msgTran.AryData[0]) * 256 + Convert.ToInt32(msgTran.AryData[1]);
 
                 RefreshInventory(0x92);
-                string strLog1 = strCmd + " " + m_curInventoryBuffer.nTagCount.ToString();
+                var strLog1 = strCmd + " " + m_curInventoryBuffer.nTagCount;
                 WriteLog(lrtxtLog, strLog1, 0);
                 return;
             }
-            else if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-            }
-            else
-            {
-                strErrorCode = "Unknown Error";
-            }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            if (msgTran.AryData.Length == 1)
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
+            else
+                strErrorCode = "Unknown Error";
+
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
             WriteLog(lrtxtLog, strLog, 1);
         }
@@ -3070,10 +2860,10 @@ namespace UHFDemo
             reader.ResetInventoryBuffer(m_curSetting.btReadId);
         }
 
-        private void ProcessResetInventoryBuffer(Reader.MessageTran msgTran)
+        private void ProcessResetInventoryBuffer(MessageTran msgTran)
         {
-            string strCmd = "Clear buffer";
-            string strErrorCode = string.Empty;
+            var strCmd = "Clear buffer";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -3083,17 +2873,15 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
             WriteLog(lrtxtLog, strLog, 1);
         }
@@ -3112,10 +2900,10 @@ namespace UHFDemo
             }
         }
 
-        private void ProcessGetAccessEpcMatch(Reader.MessageTran msgTran)
+        private void ProcessGetAccessEpcMatch(MessageTran msgTran)
         {
-            string strCmd = "Get selected tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Get selected tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -3124,35 +2912,32 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, "Unselected Tag", 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 if (msgTran.AryData[0] == 0x00)
                 {
-                    m_curOperateTagBuffer.strAccessEpcMatch = CCommondMethod.ByteArrayToString(msgTran.AryData, 2, Convert.ToInt32(msgTran.AryData[1]));
-                    
+                    m_curOperateTagBuffer.strAccessEpcMatch =
+                        CCommondMethod.ByteArrayToString(msgTran.AryData, 2, Convert.ToInt32(msgTran.AryData[1]));
+
                     RefreshOpTag(0x86);
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = "Unknown Error";
-                }
+
+                strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
             WriteLog(lrtxtLog, strLog, 1);
         }
 
         private void btnSetAccessEpcMatch_Click(object sender, EventArgs e)
         {
-            string[] reslut = CCommondMethod.StringToStringArray(cmbSetAccessEpcMatch.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(cmbSetAccessEpcMatch.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
@@ -3160,7 +2945,7 @@ namespace UHFDemo
                 return;
             }
 
-            byte[] btAryEpc = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
+            var btAryEpc = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
 
             m_curOperateTagBuffer.strAccessEpcMatch = cmbSetAccessEpcMatch.Text;
             txtAccessEpcMatch.Text = cmbSetAccessEpcMatch.Text;
@@ -3168,10 +2953,10 @@ namespace UHFDemo
             reader.SetAccessEpcMatch(m_curSetting.btReadId, 0x00, Convert.ToByte(btAryEpc.Length), btAryEpc);
         }
 
-        private void ProcessSetAccessEpcMatch(Reader.MessageTran msgTran)
+        private void ProcessSetAccessEpcMatch(MessageTran msgTran)
         {
-            string strCmd = "Select/Deselect Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Select/Deselect Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
@@ -3180,17 +2965,15 @@ namespace UHFDemo
                     WriteLog(lrtxtLog, strCmd, 0);
                     return;
                 }
-                else
-                {
-                    strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                }
+
+                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
             }
             else
             {
                 strErrorCode = "Unknown Error";
             }
 
-            string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+            var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
             WriteLog(lrtxtLog, strLog, 1);
         }
@@ -3249,43 +3032,42 @@ namespace UHFDemo
                 ltvOperate.Items.Clear();
                 reader.ReadTag(m_curSetting.btReadId, btMemBank, btWordAdd, btWordCnt);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-            
         }
 
-        private void ProcessReadTag(Reader.MessageTran msgTran)
+        private void ProcessReadTag(MessageTran msgTran)
         {
-            string strCmd = "Read Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Read Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nLen = msgTran.AryData.Length;
-                int nDataLen = Convert.ToInt32(msgTran.AryData[nLen - 3]);
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - nDataLen - 4;
+                var nLen = msgTran.AryData.Length;
+                var nDataLen = Convert.ToInt32(msgTran.AryData[nLen - 3]);
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - nDataLen - 4;
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strData = CCommondMethod.ByteArrayToString(msgTran.AryData, 7 + nEpcLen, nDataLen);
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strData = CCommondMethod.ByteArrayToString(msgTran.AryData, 7 + nEpcLen, nDataLen);
 
-                byte byTemp = msgTran.AryData[nLen - 2];
-                byte byAntId = (byte)((byTemp & 0x03) + 1);
-                string strAntId = byAntId.ToString();
+                var byTemp = msgTran.AryData[nLen - 2];
+                var byAntId = (byte) ((byTemp & 0x03) + 1);
+                var strAntId = byAntId.ToString();
 
-                string strReadCount = msgTran.AryData[nLen - 1].ToString();
+                var strReadCount = msgTran.AryData[nLen - 1].ToString();
 
-                DataRow row = m_curOperateTagBuffer.dtTagTable.NewRow();
+                var row = m_curOperateTagBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEPC;
@@ -3342,19 +3124,21 @@ namespace UHFDemo
                     return;
                 }
 
-                string[] reslut = CCommondMethod.StringToStringArray(htxtReadAndWritePwd.Text.ToUpper(), 2);
+                var reslut = CCommondMethod.StringToStringArray(htxtReadAndWritePwd.Text.ToUpper(), 2);
 
                 if (reslut == null)
                 {
                     MessageBox.Show("Invalid input characters");
                     return;
                 }
-                else if (reslut.GetLength(0) < 4)
+
+                if (reslut.GetLength(0) < 4)
                 {
                     MessageBox.Show("Enter at least 4 bytes");
                     return;
                 }
-                byte[] btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
+
+                var btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
 
                 reslut = CCommondMethod.StringToStringArray(htxtWriteData.Text.ToUpper(), 2);
 
@@ -3363,7 +3147,8 @@ namespace UHFDemo
                     MessageBox.Show("Invalid input characters");
                     return;
                 }
-                byte[] btAryWriteData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
+
+                var btAryWriteData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
                 btWordCnt = Convert.ToByte(reslut.Length / 2 + reslut.Length % 2);
 
                 txtWordCnt.Text = btWordCnt.ToString();
@@ -3372,51 +3157,50 @@ namespace UHFDemo
                 ltvOperate.Items.Clear();
                 reader.WriteTag(m_curSetting.btReadId, btAryPwd, btMemBank, btWordAdd, btWordCnt, btAryWriteData);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
-            
         }
 
-        private void ProcessWriteTag(Reader.MessageTran msgTran)
+        private void ProcessWriteTag(MessageTran msgTran)
         {
-            string strCmd = "Write Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Write Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nLen = msgTran.AryData.Length;
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2])  - 4;
+                var nLen = msgTran.AryData.Length;
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
 
                 if (msgTran.AryData[nLen - 3] != 0x10)
                 {
                     strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[nLen - 3]);
-                    string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                    var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                     WriteLog(lrtxtLog, strLog, 1);
                     return;
                 }
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strData = string.Empty;
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strData = string.Empty;
 
-                byte byTemp = msgTran.AryData[nLen - 2];
-                byte byAntId = (byte)((byTemp & 0x03) + 1);
-                string strAntId = byAntId.ToString();
+                var byTemp = msgTran.AryData[nLen - 2];
+                var byAntId = (byte) ((byTemp & 0x03) + 1);
+                var strAntId = byAntId.ToString();
 
-                string strReadCount = msgTran.AryData[nLen - 1].ToString();
+                var strReadCount = msgTran.AryData[nLen - 1].ToString();
 
-                DataRow row = m_curOperateTagBuffer.dtTagTable.NewRow();
+                var row = m_curOperateTagBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEPC;
@@ -3486,64 +3270,65 @@ namespace UHFDemo
                 return;
             }
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtLockPwd.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtLockPwd.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 4)
+
+            if (reslut.GetLength(0) < 4)
             {
                 MessageBox.Show("Enter at least 4 bytes");
                 return;
             }
 
-            byte[] btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
+            var btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
 
             m_curOperateTagBuffer.dtTagTable.Clear();
             ltvOperate.Items.Clear();
             reader.LockTag(m_curSetting.btReadId, btAryPwd, btMemBank, btLockType);
         }
 
-        private void ProcessLockTag(Reader.MessageTran msgTran)
+        private void ProcessLockTag(MessageTran msgTran)
         {
-            string strCmd = "Lock Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Lock Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nLen = msgTran.AryData.Length;
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
+                var nLen = msgTran.AryData.Length;
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
 
                 if (msgTran.AryData[nLen - 3] != 0x10)
                 {
                     strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[nLen - 3]);
-                    string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                    var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                     WriteLog(lrtxtLog, strLog, 1);
                     return;
                 }
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strData = string.Empty;
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strData = string.Empty;
 
-                byte byTemp = msgTran.AryData[nLen - 2];
-                byte byAntId = (byte)((byTemp & 0x03) + 1);
-                string strAntId = byAntId.ToString();
+                var byTemp = msgTran.AryData[nLen - 2];
+                var byAntId = (byte) ((byTemp & 0x03) + 1);
+                var strAntId = byAntId.ToString();
 
-                string strReadCount = msgTran.AryData[nLen - 1].ToString();
+                var strReadCount = msgTran.AryData[nLen - 1].ToString();
 
-                DataRow row = m_curOperateTagBuffer.dtTagTable.NewRow();
+                var row = m_curOperateTagBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEPC;
@@ -3562,64 +3347,65 @@ namespace UHFDemo
 
         private void btnKillTag_Click(object sender, EventArgs e)
         {
-            string[] reslut = CCommondMethod.StringToStringArray(htxtKillPwd.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtKillPwd.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 4)
+
+            if (reslut.GetLength(0) < 4)
             {
                 MessageBox.Show("Enter at least 4 bytes");
                 return;
             }
 
-            byte[] btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
+            var btAryPwd = CCommondMethod.StringArrayToByteArray(reslut, 4);
 
             m_curOperateTagBuffer.dtTagTable.Clear();
             ltvOperate.Items.Clear();
             reader.KillTag(m_curSetting.btReadId, btAryPwd);
         }
 
-        private void ProcessKillTag(Reader.MessageTran msgTran)
+        private void ProcessKillTag(MessageTran msgTran)
         {
-            string strCmd = "Kill Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Kill Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                int nLen = msgTran.AryData.Length;
-                int nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
+                var nLen = msgTran.AryData.Length;
+                var nEpcLen = Convert.ToInt32(msgTran.AryData[2]) - 4;
 
                 if (msgTran.AryData[nLen - 3] != 0x10)
                 {
                     strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[nLen - 3]);
-                    string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                    var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                     WriteLog(lrtxtLog, strLog, 1);
                     return;
                 }
 
-                string strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
-                string strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
-                string strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
-                string strData = string.Empty;
+                var strPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 3, 2);
+                var strEPC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5, nEpcLen);
+                var strCRC = CCommondMethod.ByteArrayToString(msgTran.AryData, 5 + nEpcLen, 2);
+                var strData = string.Empty;
 
-                byte byTemp = msgTran.AryData[nLen - 2];
-                byte byAntId = (byte)((byTemp & 0x03) + 1);
-                string strAntId = byAntId.ToString();
+                var byTemp = msgTran.AryData[nLen - 2];
+                var byAntId = (byte) ((byTemp & 0x03) + 1);
+                var strAntId = byAntId.ToString();
 
-                string strReadCount = msgTran.AryData[nLen - 1].ToString();
+                var strReadCount = msgTran.AryData[nLen - 1].ToString();
 
-                DataRow row = m_curOperateTagBuffer.dtTagTable.NewRow();
+                var row = m_curOperateTagBuffer.dtTagTable.NewRow();
                 row[0] = strPC;
                 row[1] = strCRC;
                 row[2] = strEPC;
@@ -3637,7 +3423,7 @@ namespace UHFDemo
         }
 
         private void btnInventoryISO18000_Click(object sender, EventArgs e)
-        {            
+        {
             if (m_bContinue)
             {
                 m_bContinue = false;
@@ -3650,15 +3436,12 @@ namespace UHFDemo
                 //Judge whether EPC inventory is runing.
                 if (m_curInventoryBuffer.bLoopInventory)
                 {
-                    if (MessageBox.Show("EPC C1G2 tag is inventoring, whether to stop?", "Prompt", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Cancel)
-                    {
-                        return;
-                    }
-                    else
-                    {
-                        btnInventory_Click(sender, e);
-                        return;
-                    }
+                    if (MessageBox.Show("EPC C1G2 tag is inventoring, whether to stop?", "Prompt",
+                            MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
+                        DialogResult.Cancel) return;
+
+                    btnInventory_Click(sender, e);
+                    return;
                 }
 
                 m_curOperateTagISO18000Buffer.ClearBuffer();
@@ -3668,38 +3451,38 @@ namespace UHFDemo
                 btnInventoryISO18000.ForeColor = Color.White;
                 btnInventoryISO18000.Text = "Stop";
 
-                string strCmd = "Inventory";
+                var strCmd = "Inventory";
                 WriteLog(lrtxtLog, strCmd, 0);
-                
+
                 reader.InventoryISO18000(m_curSetting.btReadId);
-            }            
+            }
         }
 
-        private void ProcessInventoryISO18000(Reader.MessageTran msgTran)
+        private void ProcessInventoryISO18000(MessageTran msgTran)
         {
-            string strCmd = "Inventory";
-            string strErrorCode = string.Empty;
+            var strCmd = "Inventory";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 if (msgTran.AryData[0] != 0xFF)
                 {
                     strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                    string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                    var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                     WriteLog(lrtxtLog, strLog, 1);
-                }                
+                }
             }
             else if (msgTran.AryData.Length == 9)
             {
-                string strAntID = CCommondMethod.ByteArrayToString(msgTran.AryData, 0, 1);
-                string strUID = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 8);
+                var strAntID = CCommondMethod.ByteArrayToString(msgTran.AryData, 0, 1);
+                var strUID = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, 8);
 
                 //Add saved Tag List, no inventoried add recording, otherwise, the tag inventory number plus 1.
-                DataRow[] drs = m_curOperateTagISO18000Buffer.dtTagTable.Select(string.Format("UID = '{0}'", strUID));
+                var drs = m_curOperateTagISO18000Buffer.dtTagTable.Select(string.Format("UID = '{0}'", strUID));
                 if (drs.Length == 0)
                 {
-                    DataRow row = m_curOperateTagISO18000Buffer.dtTagTable.NewRow();
+                    var row = m_curOperateTagISO18000Buffer.dtTagTable.NewRow();
                     row[0] = strAntID;
                     row[1] = strUID;
                     row[2] = "1";
@@ -3708,12 +3491,11 @@ namespace UHFDemo
                 }
                 else
                 {
-                    DataRow row = drs[0];
+                    var row = drs[0];
                     row.BeginEdit();
                     row[2] = (Convert.ToInt32(row[2]) + 1).ToString();
                     m_curOperateTagISO18000Buffer.dtTagTable.AcceptChanges();
                 }
-                
             }
             else if (msgTran.AryData.Length == 2)
             {
@@ -3725,7 +3507,7 @@ namespace UHFDemo
             else
             {
                 strErrorCode = "Unknown Error";
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
@@ -3738,50 +3520,55 @@ namespace UHFDemo
                 MessageBox.Show("Please enter UID");
                 return;
             }
+
             if (htxtReadStartAdd.Text.Length == 0)
             {
                 MessageBox.Show("Please enter Start Add");
                 return;
             }
+
             if (txtReadLength.Text.Length == 0)
             {
                 MessageBox.Show("Please enter Length");
                 return;
             }
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 8)
+
+            if (reslut.GetLength(0) < 8)
             {
                 MessageBox.Show("Enter at least 8 bytes");
                 return;
             }
-            byte[] btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
 
-            reader.ReadTagISO18000(m_curSetting.btReadId, btAryUID, Convert.ToByte(htxtReadStartAdd.Text, 16), Convert.ToByte(txtReadLength.Text, 16));
+            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
+
+            reader.ReadTagISO18000(m_curSetting.btReadId, btAryUID, Convert.ToByte(htxtReadStartAdd.Text, 16),
+                Convert.ToByte(txtReadLength.Text, 16));
         }
 
-        private void ProcessReadTagISO18000(Reader.MessageTran msgTran)
+        private void ProcessReadTagISO18000(MessageTran msgTran)
         {
-            string strCmd = "Read Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Read Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
             else
             {
-                string strAntID = CCommondMethod.ByteArrayToString(msgTran.AryData, 0, 1);
-                string strData = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, msgTran.AryData.Length - 1);
+                var strAntID = CCommondMethod.ByteArrayToString(msgTran.AryData, 0, 1);
+                var strData = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, msgTran.AryData.Length - 1);
 
                 m_curOperateTagISO18000Buffer.btAntId = Convert.ToByte(strAntID);
                 m_curOperateTagISO18000Buffer.strReadData = strData;
@@ -3804,7 +3591,7 @@ namespace UHFDemo
 
                 WriteTagISO18000();
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
@@ -3817,35 +3604,39 @@ namespace UHFDemo
                 MessageBox.Show("Please enter UID");
                 return;
             }
+
             if (htxtWriteStartAdd.Text.Length == 0)
             {
                 MessageBox.Show("Please enter Start Add");
                 return;
             }
+
             if (htxtWriteData18000.Text.Length == 0)
             {
                 MessageBox.Show("Please enter Data to be written");
                 return;
             }
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 8)
+
+            if (reslut.GetLength(0) < 8)
             {
                 MessageBox.Show("Enter at least 8 bytes");
                 return;
             }
-            byte[] btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
 
-            byte btStartAdd = Convert.ToByte(htxtWriteStartAdd.Text, 16);
+            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
+
+            var btStartAdd = Convert.ToByte(htxtWriteStartAdd.Text, 16);
 
             //string[] reslut = CCommondMethod.StringToStringArray(htxtWriteData18000.Text.ToUpper(), 2);
-            string strTemp = cleanString(htxtWriteData18000.Text);
+            var strTemp = cleanString(htxtWriteData18000.Text);
             reslut = CCommondMethod.StringToStringArray(strTemp.ToUpper(), 2);
 
             if (reslut == null)
@@ -3854,11 +3645,11 @@ namespace UHFDemo
                 return;
             }
 
-            byte[] btAryData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
+            var btAryData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
 
             //byte btLength = Convert.ToByte(txtWriteLength.Text, 16);
-            byte btLength = Convert.ToByte(reslut.Length);
-            txtWriteLength.Text = String.Format("{0:X}", btLength);
+            var btLength = Convert.ToByte(reslut.Length);
+            txtWriteLength.Text = string.Format("{0:X}", btLength);
             m_nBytes = reslut.Length;
 
             reader.WriteTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd, btLength, btAryData);
@@ -3866,20 +3657,20 @@ namespace UHFDemo
 
         private string cleanString(string newStr)
         {
-            string tempStr = newStr.Replace('\r', ' ');
+            var tempStr = newStr.Replace('\r', ' ');
             return tempStr.Replace('\n', ' ');
         }
 
 
-        private void ProcessWriteTagISO18000(Reader.MessageTran msgTran)
+        private void ProcessWriteTagISO18000(MessageTran msgTran)
         {
-            string strCmd = "Write Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Write Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
@@ -3892,8 +3683,8 @@ namespace UHFDemo
                 m_curOperateTagISO18000Buffer.btWriteLength = msgTran.AryData[1];
 
                 //RefreshISO18000(msgTran.Cmd);
-                string strLength = msgTran.AryData[1].ToString();
-                string strLog = strCmd + ": " + "Successfully written" + strLength + "byte";
+                var strLength = msgTran.AryData[1].ToString();
+                var strLog = strCmd + ": " + "Successfully written" + strLength + "byte";
                 WriteLog(lrtxtLog, strLog, 0);
                 RunLoopISO18000(Convert.ToInt32(msgTran.AryData[1]));
             }
@@ -3906,6 +3697,7 @@ namespace UHFDemo
                 MessageBox.Show("Please enter UID");
                 return;
             }
+
             if (htxtLockAdd.Text.Length == 0)
             {
                 MessageBox.Show("Please enter write-protected Add");
@@ -3913,39 +3705,40 @@ namespace UHFDemo
             }
 
             //Confirm the write protection prompt
-            if (MessageBox.Show("Are you sure to write protect this address permanently?", "Prompt", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Cancel) 
-            {
-                return;
-            }
+            if (MessageBox.Show("Are you sure to write protect this address permanently?", "Prompt",
+                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
+                DialogResult.Cancel) return;
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 8)
+
+            if (reslut.GetLength(0) < 8)
             {
                 MessageBox.Show("Enter at least 8 bytes");
                 return;
             }
-            byte[] btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
 
-            byte btStartAdd = Convert.ToByte(htxtLockAdd.Text, 16);
+            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
+
+            var btStartAdd = Convert.ToByte(htxtLockAdd.Text, 16);
 
             reader.LockTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd);
         }
 
-        private void ProcessLockTagISO18000(Reader.MessageTran msgTran)
+        private void ProcessLockTagISO18000(MessageTran msgTran)
         {
-            string strCmd = "Permanent write protection";
-            string strErrorCode = string.Empty;
+            var strCmd = "Permanent write protection";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
@@ -3958,7 +3751,7 @@ namespace UHFDemo
                 m_curOperateTagISO18000Buffer.btStatus = msgTran.AryData[1];
 
                 //RefreshISO18000(msgTran.Cmd);
-                string strLog = string.Empty; 
+                var strLog = string.Empty;
                 switch (msgTran.AryData[1])
                 {
                     case 0x00:
@@ -3970,12 +3763,9 @@ namespace UHFDemo
                     case 0xFF:
                         strLog = strCmd + ": " + "Unable to lock";
                         break;
-                    default:
-                        break;
                 }
 
                 WriteLog(lrtxtLog, strLog, 0);
-                
             }
         }
 
@@ -3986,40 +3776,43 @@ namespace UHFDemo
                 MessageBox.Show("Please enter UID");
                 return;
             }
+
             if (htxtQueryAdd.Text.Length == 0)
             {
                 MessageBox.Show("Please enter the query address");
                 return;
             }
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
+            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
 
             if (reslut == null)
             {
                 MessageBox.Show("Invalid input characters");
                 return;
             }
-            else if (reslut.GetLength(0) < 8)
+
+            if (reslut.GetLength(0) < 8)
             {
                 MessageBox.Show("Enter at least 8 bytes");
                 return;
             }
-            byte[] btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
 
-            byte btStartAdd = Convert.ToByte(htxtQueryAdd.Text, 16);
+            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
+
+            var btStartAdd = Convert.ToByte(htxtQueryAdd.Text, 16);
 
             reader.QueryTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd);
         }
 
-        private void ProcessQueryISO18000(Reader.MessageTran msgTran)
+        private void ProcessQueryISO18000(MessageTran msgTran)
         {
-            string strCmd = "Query Tag";
-            string strErrorCode = string.Empty;
+            var strCmd = "Query Tag";
+            var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
             {
                 strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                string strLog = strCmd + "Failure, failure cause: " + strErrorCode;
+                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
@@ -4039,29 +3832,23 @@ namespace UHFDemo
 
         private void htxtSendData_Leave(object sender, EventArgs e)
         {
-            if (htxtSendData.TextLength == 0)
-            {
-                return;
-            }
+            if (htxtSendData.TextLength == 0) return;
 
-            string[] reslut = CCommondMethod.StringToStringArray(htxtSendData.Text.ToUpper(), 2);
-            byte[] btArySendData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
+            var reslut = CCommondMethod.StringToStringArray(htxtSendData.Text.ToUpper(), 2);
+            var btArySendData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
 
-            byte btCheckData = reader.CheckValue(btArySendData);
+            var btCheckData = reader.CheckValue(btArySendData);
             htxtCheckData.Text = string.Format(" {0:X2}", btCheckData);
         }
 
         private void btnSendData_Click(object sender, EventArgs e)
         {
-            if (htxtSendData.TextLength == 0)
-            {
-                return;
-            }
+            if (htxtSendData.TextLength == 0) return;
 
-            string strData = htxtSendData.Text + htxtCheckData.Text;
+            var strData = htxtSendData.Text + htxtCheckData.Text;
 
-            string[] reslut = CCommondMethod.StringToStringArray(strData.ToUpper(), 2);
-            byte[] btArySendData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
+            var reslut = CCommondMethod.StringToStringArray(strData.ToUpper(), 2);
+            var btArySendData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
 
             reader.SendMessage(btArySendData);
         }
@@ -4084,11 +3871,8 @@ namespace UHFDemo
 
         private void tabCtrMain_SelectedIndexChanged(object sender, EventArgs e)
         {
-            if (m_bLockTab)
-            {
-                tabCtrMain.SelectTab(1);
-            }
-            int nIndex = tabCtrMain.SelectedIndex;
+            if (m_bLockTab) tabCtrMain.SelectTab(1);
+            var nIndex = tabCtrMain.SelectedIndex;
 
             if (nIndex == 2)
             {
@@ -4100,65 +3884,46 @@ namespace UHFDemo
         private void txtTcpPort_KeyPress(object sender, KeyPressEventArgs e)
         {
             e.Handled = true;
-            if ((e.KeyChar >= '0' && e.KeyChar <= '9') || e.KeyChar == (char)ConsoleKey.Backspace)
-            {
-                e.Handled = false;
-            }
+            if (e.KeyChar >= '0' && e.KeyChar <= '9' || e.KeyChar == (char) ConsoleKey.Backspace) e.Handled = false;
         }
 
         private void txtOutputPower_KeyPress(object sender, KeyPressEventArgs e)
         {
             e.Handled = true;
-            if ((e.KeyChar >= '0' && e.KeyChar <= '9') || e.KeyChar == (char)ConsoleKey.Backspace)
-            {
-                e.Handled = false;
-            }
+            if (e.KeyChar >= '0' && e.KeyChar <= '9' || e.KeyChar == (char) ConsoleKey.Backspace) e.Handled = false;
         }
 
         private void txtChannel_KeyPress(object sender, KeyPressEventArgs e)
         {
             e.Handled = true;
-            if ((e.KeyChar >= '0' && e.KeyChar <= '9') || e.KeyChar == (char)ConsoleKey.Backspace)
-            {
-                e.Handled = false;
-            }
+            if (e.KeyChar >= '0' && e.KeyChar <= '9' || e.KeyChar == (char) ConsoleKey.Backspace) e.Handled = false;
         }
 
         private void txtWordAdd_KeyPress(object sender, KeyPressEventArgs e)
         {
             e.Handled = true;
-            if ((e.KeyChar >= '0' && e.KeyChar <= '9') || e.KeyChar == (char)ConsoleKey.Backspace)
-            {
-                e.Handled = false;
-            }
+            if (e.KeyChar >= '0' && e.KeyChar <= '9' || e.KeyChar == (char) ConsoleKey.Backspace) e.Handled = false;
         }
 
         private void txtWordCnt_KeyPress(object sender, KeyPressEventArgs e)
         {
             e.Handled = true;
-            if ((e.KeyChar >= '0' && e.KeyChar <= '9') || e.KeyChar == (char)ConsoleKey.Backspace)
-            {
-                e.Handled = false;
-            }
+            if (e.KeyChar >= '0' && e.KeyChar <= '9' || e.KeyChar == (char) ConsoleKey.Backspace) e.Handled = false;
         }
 
         private void cmbSetAccessEpcMatch_DropDown(object sender, EventArgs e)
         {
             cmbSetAccessEpcMatch.Items.Clear();
-            DataRow[] drs = m_curInventoryBuffer.dtTagTable.Select();
-            foreach (DataRow row in drs)
-            {
-                cmbSetAccessEpcMatch.Items.Add(row[2].ToString());
-            }
+            var drs = m_curInventoryBuffer.dtTagTable.Select();
+            foreach (var row in drs) cmbSetAccessEpcMatch.Items.Add(row[2].ToString());
         }
 
-        
+
         private void btnClearInventoryRealResult_Click(object sender, EventArgs e)
         {
             m_curInventoryBuffer.ClearInventoryRealResult();
 
-           
-            
+
             lvRealList.Items.Clear();
             //ltvInventoryTag.Items.Clear();
         }
@@ -4169,46 +3934,36 @@ namespace UHFDemo
             DataRow[] drs;
 
             if (lvRealList.SelectedItems.Count == 0)
-            {
                 drs = m_curInventoryBuffer.dtTagDetailTable.Select();
-                //ShowListView(ltvInventoryTag, drs);
-            }
             else
-            {
                 foreach (ListViewItem itemEpc in lvRealList.SelectedItems)
                 {
                     //ListViewItem itemEpc = ltvInventoryEpc.Items[nIndex];
-                    string strEpc = itemEpc.SubItems[1].Text;
+                    var strEpc = itemEpc.SubItems[1].Text;
 
                     drs = m_curInventoryBuffer.dtTagDetailTable.Select(string.Format("COLEPC = '{0}'", strEpc));
                     //ShowListView(ltvInventoryTag, drs);
                 }
-            }
         }
 
         private void ShowListView(ListView ltvListView, DataRow[] drSelect)
         {
             //ltvListView.AutoResizeColumns(ColumnHeaderAutoResizeStyle.HeaderSize);
-            int nItemCount = ltvListView.Items.Count;
-            int nIndex = 1;
+            var nItemCount = ltvListView.Items.Count;
+            var nIndex = 1;
 
-            foreach (DataRow row in drSelect)
+            foreach (var row in drSelect)
             {
-                ListViewItem item = new ListViewItem();
+                var item = new ListViewItem();
                 item.Text = (nItemCount + nIndex).ToString();
                 item.SubItems.Add(row[0].ToString());
 
-                string strTemp = (Convert.ToInt32(row[1].ToString()) - 129).ToString() + "dBm";
+                var strTemp = Convert.ToInt32(row[1].ToString()) - 129 + "dBm";
                 item.SubItems.Add(strTemp);
-                byte byTemp = Convert.ToByte(row[1]);
+                var byTemp = Convert.ToByte(row[1]);
                 if (byTemp > 0x50)
-                {
                     item.BackColor = Color.PowderBlue;
-                }
-                else if (byTemp < 0x30)
-                {
-                    item.BackColor = Color.LemonChiffon;
-                }
+                else if (byTemp < 0x30) item.BackColor = Color.LemonChiffon;
 
                 item.SubItems.Add(row[2].ToString());
                 item.SubItems.Add(row[3].ToString());
@@ -4249,8 +4004,8 @@ namespace UHFDemo
         {
             if (ltvTagISO18000.SelectedItems.Count == 1)
             {
-                ListViewItem item = ltvTagISO18000.SelectedItems[0];
-                string strUID = item.SubItems[1].Text;
+                var item = ltvTagISO18000.SelectedItems[0];
+                var strUID = item.SubItems[1].Text;
                 htxtReadUID.Text = strUID;
             }
         }
@@ -4258,16 +4013,12 @@ namespace UHFDemo
         private void ckDisplayLog_CheckedChanged(object sender, EventArgs e)
         {
             if (ckDisplayLog.Checked)
-            {
                 m_bDisplayLog = true;
-            }
             else
-            {
                 m_bDisplayLog = false;
-            }
         }
 
-       
+
         private void btRealTimeInventory_Click(object sender, EventArgs e)
         {
             try
@@ -4281,50 +4032,42 @@ namespace UHFDemo
                     MessageBox.Show("Please enter the number of cycles");
                     return;
                 }
+
                 m_curInventoryBuffer.btRepeat = Convert.ToByte(textRealRound.Text);
 
-                if (cbRealSession.Checked == true)
+                if (cbRealSession.Checked)
                 {
                     if (cmbSession.SelectedIndex == -1)
                     {
                         MessageBox.Show("Please enter Session ID");
                         return;
                     }
+
                     if (cmbTarget.SelectedIndex == -1)
                     {
                         MessageBox.Show("Please enter Inventoried Flag");
-                            return;
+                        return;
                     }
+
                     m_curInventoryBuffer.bLoopCustomizedSession = true;
-                    m_curInventoryBuffer.btSession = (byte)cmbSession.SelectedIndex;
-                    m_curInventoryBuffer.btTarget = (byte)cmbTarget.SelectedIndex;
+                    m_curInventoryBuffer.btSession = (byte) cmbSession.SelectedIndex;
+                    m_curInventoryBuffer.btTarget = (byte) cmbTarget.SelectedIndex;
                 }
                 else
                 {
                     m_curInventoryBuffer.bLoopCustomizedSession = false;
                 }
 
-                if (cbRealWorkant1.Checked)
-                {
-                    m_curInventoryBuffer.lAntenna.Add(0x00);
-                }
-                if (cbRealWorkant2.Checked)
-                {
-                    m_curInventoryBuffer.lAntenna.Add(0x01);
-                }
-                if (cbRealWorkant3.Checked)
-                {
-                    m_curInventoryBuffer.lAntenna.Add(0x02);
-                }
-                if (cbRealWorkant4.Checked)
-                {
-                    m_curInventoryBuffer.lAntenna.Add(0x03);
-                }
+                if (cbRealWorkant1.Checked) m_curInventoryBuffer.lAntenna.Add(0x00);
+                if (cbRealWorkant2.Checked) m_curInventoryBuffer.lAntenna.Add(0x01);
+                if (cbRealWorkant3.Checked) m_curInventoryBuffer.lAntenna.Add(0x02);
+                if (cbRealWorkant4.Checked) m_curInventoryBuffer.lAntenna.Add(0x03);
                 if (m_curInventoryBuffer.lAntenna.Count == 0)
                 {
                     MessageBox.Show("One antenna must be selected");
                     return;
                 }
+
                 //Default cycle to send commands
                 if (m_curInventoryBuffer.bLoopInventory)
                 {
@@ -4338,31 +4081,26 @@ namespace UHFDemo
                     numericUpDown1.Enabled = true;
                     return;
                 }
-                else
-                {
-                    //Whether ISO 18000-6B Inventory is runing.
-                    if (m_bContinue)
-                    {
-                        if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Cancel)
-                        {
-                            return;
-                        }
-                        else
-                        {
-                            btnInventoryISO18000_Click(sender, e);
-                            return;
-                        }
-                    }
 
-                    m_bInventory = true;
-                    m_curInventoryBuffer.bLoopInventory = true;
-                    btRealTimeInventory.BackColor = Color.DarkBlue;
-                    btRealTimeInventory.ForeColor = Color.White;
-                    btRealTimeInventory.Text = "Stop";
+                //Whether ISO 18000-6B Inventory is runing.
+                if (m_bContinue)
+                {
+                    if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt",
+                            MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
+                        DialogResult.Cancel) return;
+
+                    btnInventoryISO18000_Click(sender, e);
+                    return;
                 }
 
+                m_bInventory = true;
+                m_curInventoryBuffer.bLoopInventory = true;
+                btRealTimeInventory.BackColor = Color.DarkBlue;
+                btRealTimeInventory.ForeColor = Color.White;
+                btRealTimeInventory.Text = "Stop";
+
                 m_curInventoryBuffer.bLoopInventoryReal = true;
-               
+
                 m_curInventoryBuffer.ClearInventoryRealResult();
                 lvRealList.Items.Clear();
                 lvRealList.Items.Clear();
@@ -4370,26 +4108,23 @@ namespace UHFDemo
                 tbRealMinRssi.Text = "0";
                 m_nTotal = 0;
 
-                              
-                byte btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
+
+                var btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
                 reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
                 m_curSetting.btWorkAntenna = btWorkAntenna;
 
                 timerInventory.Enabled = true;
-                                         
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
-            }  
-           
-           
+            }
         }
 
         private void btRealFresh_Click(object sender, EventArgs e)
         {
             m_curInventoryBuffer.ClearInventoryRealResult();
-            
+
             lvRealList.Items.Clear();
             lvRealList.Items.Clear();
             ledReal1.Text = "0";
@@ -4405,45 +4140,32 @@ namespace UHFDemo
             cbRealWorkant3.Checked = false;
             cbRealWorkant4.Checked = false;
             lbRealTagCount.Text = "Tag List:";
-       
-           
         }
 
         private void btBufferInventory_Click(object sender, EventArgs e)
         {
             try
             {
-                    m_curInventoryBuffer.ClearInventoryPar();
+                m_curInventoryBuffer.ClearInventoryPar();
 
-                    if (textReadRoundBuffer.Text.Length == 0)
-                    {
-                        MessageBox.Show("Please enter the number of cycles");
-                        return;
-                    }
-                    m_curInventoryBuffer.btRepeat = Convert.ToByte(textReadRoundBuffer.Text);
+                if (textReadRoundBuffer.Text.Length == 0)
+                {
+                    MessageBox.Show("Please enter the number of cycles");
+                    return;
+                }
 
-                    if (cbBufferWorkant1.Checked)
-                    {
-                        m_curInventoryBuffer.lAntenna.Add(0x00);
-                    }
-                    if (cbBufferWorkant2.Checked)
-                    {
-                        m_curInventoryBuffer.lAntenna.Add(0x01);
-                    }
-                    if (cbBufferWorkant3.Checked)
-                    {
-                        m_curInventoryBuffer.lAntenna.Add(0x02);
-                    }
-                    if (cbBufferWorkant4.Checked)
-                    {
-                        m_curInventoryBuffer.lAntenna.Add(0x03);
-                    }
-                    if (m_curInventoryBuffer.lAntenna.Count == 0)
-                    {
-                        MessageBox.Show("One antenna must be selected");
-                        return;
-                    }
-                
+                m_curInventoryBuffer.btRepeat = Convert.ToByte(textReadRoundBuffer.Text);
+
+                if (cbBufferWorkant1.Checked) m_curInventoryBuffer.lAntenna.Add(0x00);
+                if (cbBufferWorkant2.Checked) m_curInventoryBuffer.lAntenna.Add(0x01);
+                if (cbBufferWorkant3.Checked) m_curInventoryBuffer.lAntenna.Add(0x02);
+                if (cbBufferWorkant4.Checked) m_curInventoryBuffer.lAntenna.Add(0x03);
+                if (m_curInventoryBuffer.lAntenna.Count == 0)
+                {
+                    MessageBox.Show("One antenna must be selected");
+                    return;
+                }
+
 
                 //Default cycle to send commands
                 if (m_curInventoryBuffer.bLoopInventory)
@@ -4456,44 +4178,38 @@ namespace UHFDemo
 
                     return;
                 }
-                else
-                {
-                    //Whether ISO 18000-6B Inventory is runing.
-                    if (m_bContinue)
-                    {
-                        if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Cancel)
-                        {
-                            return;
-                        }
-                        else
-                        {
-                            btnInventoryISO18000_Click(sender, e);
-                            return;
-                        }
-                    }
 
-                    m_bInventory = true;
-                    m_curInventoryBuffer.bLoopInventory = true;
-                    btBufferInventory.BackColor = Color.DarkBlue;
-                    btBufferInventory.ForeColor = Color.White;
-                    btBufferInventory.Text = "Stop";
+                //Whether ISO 18000-6B Inventory is runing.
+                if (m_bContinue)
+                {
+                    if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt",
+                            MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
+                        DialogResult.Cancel) return;
+
+                    btnInventoryISO18000_Click(sender, e);
+                    return;
                 }
 
-              
+                m_bInventory = true;
+                m_curInventoryBuffer.bLoopInventory = true;
+                btBufferInventory.BackColor = Color.DarkBlue;
+                btBufferInventory.ForeColor = Color.White;
+                btBufferInventory.Text = "Stop";
+
+
                 m_curInventoryBuffer.ClearInventoryRealResult();
                 lvBufferList.Items.Clear();
                 lvBufferList.Items.Clear();
                 m_nTotal = 0;
-                
-                byte btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
+
+                var btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
                 reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
                 m_curSetting.btWorkAntenna = btWorkAntenna;
-                
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
-            }            
+            }
         }
 
         private void btGetBuffer_Click(object sender, EventArgs e)
@@ -4514,7 +4230,6 @@ namespace UHFDemo
         {
             reader.ResetInventoryBuffer(m_curSetting.btReadId);
             btBufferFresh_Click(sender, e);
-
         }
 
         private void btQueryBuffer_Click(object sender, EventArgs e)
@@ -4532,7 +4247,7 @@ namespace UHFDemo
             ledBuffer3.Text = "0";
             ledBuffer4.Text = "0";
             ledBuffer5.Text = "0";
-           
+
             textReadRoundBuffer.Text = "1";
             cbBufferWorkant1.Checked = true;
             cbBufferWorkant2.Checked = false;
@@ -4557,162 +4272,106 @@ namespace UHFDemo
                 btFastInventory.Text = "Inventory";
                 return;
             }
-            else
-            {
-                //Whether ISO 18000-6B Inventory is runing.
-                if (m_bContinue)
-                {
-                    if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt", MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) == DialogResult.Cancel)
-                    {
-                        return;
-                    }
-                    else
-                    {
-                        btnInventoryISO18000_Click(sender, e);
-                        return;
-                    }
-                }
 
-                m_bInventory = true;
-                m_curInventoryBuffer.bLoopInventory = true;
-                btFastInventory.BackColor = Color.DarkBlue;
-                btFastInventory.ForeColor = Color.White;
-                btFastInventory.Text = "Stop";
+            //Whether ISO 18000-6B Inventory is runing.
+            if (m_bContinue)
+            {
+                if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt",
+                        MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
+                    DialogResult.Cancel) return;
+
+                btnInventoryISO18000_Click(sender, e);
+                return;
             }
+
+            m_bInventory = true;
+            m_curInventoryBuffer.bLoopInventory = true;
+            btFastInventory.BackColor = Color.DarkBlue;
+            btFastInventory.ForeColor = Color.White;
+            btFastInventory.Text = "Stop";
             try
             {
                 m_curInventoryBuffer.bLoopInventoryReal = true;
-                
+
                 m_curInventoryBuffer.ClearInventoryRealResult();
                 lvFastList.Items.Clear();
-                
+
                 m_nTotal = 0;
-                    if ((cmbAntSelect1.SelectedIndex < 0) || (cmbAntSelect1.SelectedIndex > 3))  
-                    {
-                        m_btAryData[0] = 0xFF;
-                    }
-                    else
-                    {
-                        m_btAryData[0] = Convert.ToByte(cmbAntSelect1.SelectedIndex);
-                    }
-                    if (txtAStay.Text.Length == 0)
-                    {
-                        m_btAryData[1] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[1] = Convert.ToByte(txtAStay.Text);
-                    }
+                if (cmbAntSelect1.SelectedIndex < 0 || cmbAntSelect1.SelectedIndex > 3)
+                    m_btAryData[0] = 0xFF;
+                else
+                    m_btAryData[0] = Convert.ToByte(cmbAntSelect1.SelectedIndex);
+                if (txtAStay.Text.Length == 0)
+                    m_btAryData[1] = 0x00;
+                else
+                    m_btAryData[1] = Convert.ToByte(txtAStay.Text);
 
-                    if ((cmbAntSelect2.SelectedIndex < 0) || (cmbAntSelect2.SelectedIndex > 3))  
-                    {
-                        m_btAryData[2] = 0xFF;
-                    }
-                    else
-                    {
-                        m_btAryData[2] = Convert.ToByte(cmbAntSelect2.SelectedIndex);
-                    }
-                    if (txtBStay.Text.Length == 0)
-                    {
-                        m_btAryData[3] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[3] = Convert.ToByte(txtBStay.Text);
-                    }
+                if (cmbAntSelect2.SelectedIndex < 0 || cmbAntSelect2.SelectedIndex > 3)
+                    m_btAryData[2] = 0xFF;
+                else
+                    m_btAryData[2] = Convert.ToByte(cmbAntSelect2.SelectedIndex);
+                if (txtBStay.Text.Length == 0)
+                    m_btAryData[3] = 0x00;
+                else
+                    m_btAryData[3] = Convert.ToByte(txtBStay.Text);
 
-                    if ((cmbAntSelect3.SelectedIndex < 0) || (cmbAntSelect3.SelectedIndex > 3))  
-                    {
-                        m_btAryData[4] = 0xFF;
-                    }
-                    else
-                    {
-                        m_btAryData[4] = Convert.ToByte(cmbAntSelect3.SelectedIndex);
-                    }
-                    if (txtCStay.Text.Length == 0)
-                    {
-                        m_btAryData[5] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[5] = Convert.ToByte(txtCStay.Text);
-                    }
+                if (cmbAntSelect3.SelectedIndex < 0 || cmbAntSelect3.SelectedIndex > 3)
+                    m_btAryData[4] = 0xFF;
+                else
+                    m_btAryData[4] = Convert.ToByte(cmbAntSelect3.SelectedIndex);
+                if (txtCStay.Text.Length == 0)
+                    m_btAryData[5] = 0x00;
+                else
+                    m_btAryData[5] = Convert.ToByte(txtCStay.Text);
 
-                    if ((cmbAntSelect4.SelectedIndex < 0) || (cmbAntSelect4.SelectedIndex > 3))  
-                    {
-                        m_btAryData[6] = 0xFF;
-                    }
-                    else
-                    {
-                        m_btAryData[6] = Convert.ToByte(cmbAntSelect4.SelectedIndex);
-                    }
-                    if (txtDStay.Text.Length == 0)
-                    {
-                        m_btAryData[7] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[7] = Convert.ToByte(txtDStay.Text);
-                    }
+                if (cmbAntSelect4.SelectedIndex < 0 || cmbAntSelect4.SelectedIndex > 3)
+                    m_btAryData[6] = 0xFF;
+                else
+                    m_btAryData[6] = Convert.ToByte(cmbAntSelect4.SelectedIndex);
+                if (txtDStay.Text.Length == 0)
+                    m_btAryData[7] = 0x00;
+                else
+                    m_btAryData[7] = Convert.ToByte(txtDStay.Text);
 
-                    if (txtInterval.Text.Length == 0)
-                    {
-                        m_btAryData[8] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[8] = Convert.ToByte(txtInterval.Text);
-                    }
+                if (txtInterval.Text.Length == 0)
+                    m_btAryData[8] = 0x00;
+                else
+                    m_btAryData[8] = Convert.ToByte(txtInterval.Text);
 
-                    if (txtRepeat.Text.Length == 0)
-                    {
-                        m_btAryData[9] = 0x00;
-                    }
-                    else
-                    {
-                        m_btAryData[9] = Convert.ToByte(txtRepeat.Text);
-                    }
+                if (txtRepeat.Text.Length == 0)
+                    m_btAryData[9] = 0x00;
+                else
+                    m_btAryData[9] = Convert.ToByte(txtRepeat.Text);
 
-                    if (m_btAryData[0] > 3) 
-                    {
-                        antASelection = 0;
-                    }
+                if (m_btAryData[0] > 3) antASelection = 0;
 
-                    if (m_btAryData[2] > 3)
-                    {
-                        antBSelection = 0;
-                    }
+                if (m_btAryData[2] > 3) antBSelection = 0;
 
-                    if (m_btAryData[4] > 3)
-                    {
-                        antCSelection = 0;
-                    }
+                if (m_btAryData[4] > 3) antCSelection = 0;
 
-                    if (m_btAryData[6] > 3)
-                    {
-                        antDSelection = 0;
-                    }
+                if (m_btAryData[6] > 3) antDSelection = 0;
 
-                    if ((antASelection * m_btAryData[1] + antBSelection * m_btAryData[3] + antCSelection * m_btAryData[5] + antDSelection * m_btAryData[7]) * m_btAryData[9] == 0)
-                    {
-                        MessageBox.Show("One antenna must be selected, polling at least once,repeat per command at least once.");
-                        m_bInventory = false;
-                        m_curInventoryBuffer.bLoopInventory = false;
-                        btFastInventory.BackColor = Color.WhiteSmoke;
-                        btFastInventory.ForeColor = Color.DarkBlue;
-                        btFastInventory.Text = "Inventory";
-                        return;    
-                    }
+                if ((antASelection * m_btAryData[1] + antBSelection * m_btAryData[3] + antCSelection * m_btAryData[5] +
+                     antDSelection * m_btAryData[7]) * m_btAryData[9] == 0)
+                {
+                    MessageBox.Show(
+                        "One antenna must be selected, polling at least once,repeat per command at least once.");
+                    m_bInventory = false;
+                    m_curInventoryBuffer.bLoopInventory = false;
+                    btFastInventory.BackColor = Color.WhiteSmoke;
+                    btFastInventory.ForeColor = Color.DarkBlue;
+                    btFastInventory.Text = "Inventory";
+                    return;
+                }
 
-                    m_nSwitchTotal = 0;
-                    m_nSwitchTime = 0;
-                    reader.FastSwitchInventory(m_curSetting.btReadId, m_btAryData);
-            
+                m_nSwitchTotal = 0;
+                m_nSwitchTime = 0;
+                reader.FastSwitchInventory(m_curSetting.btReadId, m_btAryData);
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
-            }            
+            }
         }
 
         private void buttonFastFresh_Click(object sender, EventArgs e)
@@ -4741,7 +4400,6 @@ namespace UHFDemo
 
             txtInterval.Text = "0";
             txtRepeat.Text = "10";
-
         }
 
         private void pageFast4AntMode_Enter(object sender, EventArgs e)
@@ -4769,17 +4427,11 @@ namespace UHFDemo
             byte btMonzaStatus = 0xFF;
 
             if (rdbMonzaOn.Checked)
-            {
                 btMonzaStatus = 0x8D;
-            }
             else if (rdbMonzaOff.Checked)
-            {
                 btMonzaStatus = 0x00;
-            }
             else
-            {
                 return;
-            }
 
             reader.SetMonzaStatus(m_curSetting.btReadId, btMonzaStatus);
             m_curSetting.btMonzaStatus = btMonzaStatus;
@@ -4794,29 +4446,30 @@ namespace UHFDemo
         {
             try
             {
-                string strTemp = htbSetIdentifier.Text.Trim();
+                var strTemp = htbSetIdentifier.Text.Trim();
 
 
-                string[] result = CCommondMethod.StringToStringArray(strTemp.ToUpper(), 2);
+                var result = CCommondMethod.StringToStringArray(strTemp.ToUpper(), 2);
 
                 if (result == null)
                 {
                     MessageBox.Show("Invalid input characters");
                     return;
                 }
-                else if (result.GetLength(0) != 12)
+
+                if (result.GetLength(0) != 12)
                 {
                     MessageBox.Show("Please enter 12 bytes");
                     return;
                 }
-                byte[] readerIdentifier = CCommondMethod.StringArrayToByteArray(result, 12);
+
+                var readerIdentifier = CCommondMethod.StringArrayToByteArray(result, 12);
 
 
                 reader.SetReaderIdentifier(m_curSetting.btReadId, readerIdentifier);
                 //m_curSetting.btReadId = Convert.ToByte(strTemp, 16);
-                
             }
-            catch (System.Exception ex)
+            catch (Exception ex)
             {
                 MessageBox.Show(ex.Message);
             }
@@ -4875,7 +4528,7 @@ namespace UHFDemo
 
         private void cbRealSession_CheckedChanged(object sender, EventArgs e)
         {
-            if (cbRealSession.Checked == true)
+            if (cbRealSession.Checked)
             {
                 label97.Enabled = true;
                 label98.Enabled = true;
@@ -4894,18 +4547,15 @@ namespace UHFDemo
         private void btReturnLoss_Click(object sender, EventArgs e)
         {
             if (cmbReturnLossFreq.SelectedIndex != -1)
-            {
                 reader.MeasureReturnLoss(m_curSetting.btReadId, Convert.ToByte(cmbReturnLossFreq.SelectedIndex));
-            }
         }
 
         private void cbUserDefineFreq_CheckedChanged(object sender, EventArgs e)
         {
-            if (cbUserDefineFreq.Checked == true)
+            if (cbUserDefineFreq.Checked)
             {
                 groupBox21.Enabled = false;
                 groupBox23.Enabled = true;
-
             }
             else
             {
@@ -4919,25 +4569,15 @@ namespace UHFDemo
             byte btSelectedProfile = 0xFF;
 
             if (rdbProfile0.Checked)
-            {
                 btSelectedProfile = 0xD0;
-            }
             else if (rdbProfile1.Checked)
-            {
                 btSelectedProfile = 0xD1;
-            }
             else if (rdbProfile2.Checked)
-            {
                 btSelectedProfile = 0xD2;
-            }
             else if (rdbProfile3.Checked)
-            {
                 btSelectedProfile = 0xD3;
-            }
             else
-            {
                 return;
-            }
 
             reader.SetRadioProfile(m_curSetting.btReadId, btSelectedProfile);
         }
@@ -4949,18 +4589,18 @@ namespace UHFDemo
 
         private void tabCtrMain_Click(object sender, EventArgs e)
         {
-            if ((m_curSetting.btRegion < 1) || (m_curSetting.btRegion > 4)) //If it is user defined frequencies, defined frequencies information need to be extracted firstly.
+            if (m_curSetting.btRegion < 1 || m_curSetting.btRegion > 4
+            ) //If it is user defined frequencies, defined frequencies information need to be extracted firstly.
             {
                 reader.GetFrequencyRegion(m_curSetting.btReadId);
                 Thread.Sleep(5);
-
             }
         }
 
         private void timerInventory_Tick(object sender, EventArgs e)
         {
             m_nReceiveFlag++;
-            if (m_nReceiveFlag >=5)
+            if (m_nReceiveFlag >= 5)
             {
                 RunLoopInventroy();
                 m_nReceiveFlag = 0;
@@ -4969,17 +4609,34 @@ namespace UHFDemo
 
         private void rdbGpio4Low_CheckedChanged(object sender, EventArgs e)
         {
-
         }
 
         private void label98_Click(object sender, EventArgs e)
         {
-
         }
 
         private void numericUpDown1_ValueChanged(object sender, EventArgs e)
         {
-
         }
+
+        private delegate void WriteLogUnSafe(LogRichTextBox logRichTxt, string strLog, int nType);
+
+        private delegate void RefreshInventoryUnsafe(byte btCmd);
+
+        private delegate void RefreshOpTagUnsafe(byte btCmd);
+
+        private delegate void RefreshInventoryRealUnsafe(byte btCmd);
+
+        private delegate void RefreshFastSwitchUnsafe(byte btCmd);
+
+        private delegate void RefreshReadSettingUnsafe(byte btCmd);
+
+        private delegate void RunLoopInventoryUnsafe();
+
+        private delegate void RunLoopFastSwitchUnsafe();
+
+        private delegate void RefreshISO18000Unsafe(byte btCmd);
+
+        private delegate void RunLoopISO18000Unsafe(int nLength);
     }
 }
