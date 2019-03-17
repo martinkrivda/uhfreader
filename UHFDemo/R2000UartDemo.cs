@@ -478,12 +478,14 @@ namespace UHFDemo
                         }
                         else
                         {
-                            int nIndex = 0;
+                            var nIndex = 0;
                             foreach (DataRow row in m_curInventoryBuffer.dtTagTable.Rows)
                             {
-                                ListViewItem item = lvRealList.Items[nIndex];
+                                var item = lvRealList.Items[nIndex];
+                                var epc = row[2].ToString().Replace(" ", "");
                                 item.SubItems[3].Text = row[5].ToString();
                                 nIndex++;
+                                if (cbWriteDB.Checked && int.Parse(row[5].ToString()) <= 50) WriteToDatabase(epc);
                             }
                         }
 

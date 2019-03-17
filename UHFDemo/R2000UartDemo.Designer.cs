@@ -183,6 +183,7 @@
             this.label84 = new System.Windows.Forms.Label();
             this.btRealTimeInventory = new System.Windows.Forms.Button();
             this.panel5 = new System.Windows.Forms.Panel();
+            this.cbWriteDB = new System.Windows.Forms.CheckBox();
             this.cbRealSession = new System.Windows.Forms.CheckBox();
             this.label15 = new System.Windows.Forms.Label();
             this.numericUpDown1 = new System.Windows.Forms.NumericUpDown();
@@ -451,7 +452,6 @@
             this.lxLedControl17 = new LxControl.LxLedControl();
             this.lxLedControl18 = new LxControl.LxLedControl();
             this.timerInventory = new System.Windows.Forms.Timer(this.components);
-            this.cbWriteDB = new System.Windows.Forms.CheckBox();
             this.tabCtrMain.SuspendLayout();
             this.PagReaderSetting.SuspendLayout();
             this.tabControl1.SuspendLayout();
@@ -2300,11 +2300,13 @@
             // 
             this.btRealTimeInventory.Font = new System.Drawing.Font("SimSun", 15F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(134)));
             this.btRealTimeInventory.ForeColor = System.Drawing.Color.DarkBlue;
+            this.btRealTimeInventory.Image = ((System.Drawing.Image)(resources.GetObject("btRealTimeInventory.Image")));
+            this.btRealTimeInventory.ImageAlign = System.Drawing.ContentAlignment.MiddleLeft;
             this.btRealTimeInventory.Location = new System.Drawing.Point(75, 5);
             this.btRealTimeInventory.Name = "btRealTimeInventory";
             this.btRealTimeInventory.Size = new System.Drawing.Size(144, 41);
             this.btRealTimeInventory.TabIndex = 1;
-            this.btRealTimeInventory.Text = "Inventory";
+            this.btRealTimeInventory.Text = "Start";
             this.btRealTimeInventory.UseVisualStyleBackColor = true;
             this.btRealTimeInventory.Click += new System.EventHandler(this.btRealTimeInventory_Click);
             // 
@@ -2323,6 +2325,19 @@
             this.panel5.Name = "panel5";
             this.panel5.Size = new System.Drawing.Size(561, 52);
             this.panel5.TabIndex = 1;
+            // 
+            // cbWriteDB
+            // 
+            this.cbWriteDB.AutoSize = true;
+            this.cbWriteDB.Checked = true;
+            this.cbWriteDB.CheckState = System.Windows.Forms.CheckState.Checked;
+            this.cbWriteDB.Font = new System.Drawing.Font("SimSun", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
+            this.cbWriteDB.Location = new System.Drawing.Point(5, 29);
+            this.cbWriteDB.Name = "cbWriteDB";
+            this.cbWriteDB.Size = new System.Drawing.Size(101, 16);
+            this.cbWriteDB.TabIndex = 59;
+            this.cbWriteDB.Text = "Write to DB";
+            this.cbWriteDB.UseVisualStyleBackColor = true;
             // 
             // cbRealSession
             // 
@@ -2761,7 +2776,7 @@
             this.tableLayoutPanel4.ColumnCount = 3;
             this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 50.22422F));
             this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 49.77578F));
-            this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 350F));
+            this.tableLayoutPanel4.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 352F));
             this.tableLayoutPanel4.Controls.Add(this.panel9, 2, 0);
             this.tableLayoutPanel4.Controls.Add(this.panel10, 0, 0);
             this.tableLayoutPanel4.Controls.Add(this.panel8, 1, 0);
@@ -2780,9 +2795,9 @@
             this.panel9.Controls.Add(this.btGetClearBuffer);
             this.panel9.Controls.Add(this.btGetBuffer);
             this.panel9.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panel9.Location = new System.Drawing.Point(651, 4);
+            this.panel9.Location = new System.Drawing.Point(649, 4);
             this.panel9.Name = "panel9";
-            this.panel9.Size = new System.Drawing.Size(345, 81);
+            this.panel9.Size = new System.Drawing.Size(347, 81);
             this.panel9.TabIndex = 1;
             // 
             // btClearBuffer
@@ -2841,7 +2856,7 @@
             this.panel10.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel10.Location = new System.Drawing.Point(4, 4);
             this.panel10.Name = "panel10";
-            this.panel10.Size = new System.Drawing.Size(318, 81);
+            this.panel10.Size = new System.Drawing.Size(317, 81);
             this.panel10.TabIndex = 0;
             // 
             // btBufferInventory
@@ -2883,9 +2898,9 @@
             this.panel8.Controls.Add(this.cbBufferWorkant2);
             this.panel8.Controls.Add(this.cbBufferWorkant3);
             this.panel8.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panel8.Location = new System.Drawing.Point(329, 4);
+            this.panel8.Location = new System.Drawing.Point(328, 4);
             this.panel8.Name = "panel8";
-            this.panel8.Size = new System.Drawing.Size(315, 81);
+            this.panel8.Size = new System.Drawing.Size(314, 81);
             this.panel8.TabIndex = 0;
             // 
             // cbBufferWorkant1
@@ -3481,7 +3496,7 @@
             this.tableLayoutPanel2.ColumnCount = 3;
             this.tableLayoutPanel2.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 27.20588F));
             this.tableLayoutPanel2.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Percent, 72.79412F));
-            this.tableLayoutPanel2.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 287F));
+            this.tableLayoutPanel2.ColumnStyles.Add(new System.Windows.Forms.ColumnStyle(System.Windows.Forms.SizeType.Absolute, 290F));
             this.tableLayoutPanel2.Controls.Add(this.panel2, 1, 0);
             this.tableLayoutPanel2.Controls.Add(this.panel3, 0, 0);
             this.tableLayoutPanel2.Controls.Add(this.panel4, 2, 0);
@@ -3513,9 +3528,9 @@
             this.panel2.Controls.Add(this.label59);
             this.panel2.Controls.Add(this.label48);
             this.panel2.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panel2.Location = new System.Drawing.Point(197, 5);
+            this.panel2.Location = new System.Drawing.Point(196, 5);
             this.panel2.Name = "panel2";
-            this.panel2.Size = new System.Drawing.Size(502, 76);
+            this.panel2.Size = new System.Drawing.Size(500, 76);
             this.panel2.TabIndex = 0;
             // 
             // txtDStay
@@ -3717,7 +3732,7 @@
             this.panel3.Dock = System.Windows.Forms.DockStyle.Fill;
             this.panel3.Location = new System.Drawing.Point(5, 5);
             this.panel3.Name = "panel3";
-            this.panel3.Size = new System.Drawing.Size(184, 76);
+            this.panel3.Size = new System.Drawing.Size(183, 76);
             this.panel3.TabIndex = 1;
             // 
             // btFastInventory
@@ -3739,9 +3754,9 @@
             this.panel4.Controls.Add(this.label73);
             this.panel4.Controls.Add(this.label72);
             this.panel4.Dock = System.Windows.Forms.DockStyle.Fill;
-            this.panel4.Location = new System.Drawing.Point(707, 5);
+            this.panel4.Location = new System.Drawing.Point(704, 5);
             this.panel4.Name = "panel4";
-            this.panel4.Size = new System.Drawing.Size(282, 76);
+            this.panel4.Size = new System.Drawing.Size(285, 76);
             this.panel4.TabIndex = 2;
             // 
             // txtRepeat
@@ -5470,19 +5485,6 @@
             // 
             this.timerInventory.Interval = 500;
             this.timerInventory.Tick += new System.EventHandler(this.timerInventory_Tick);
-            // 
-            // cbWriteDB
-            // 
-            this.cbWriteDB.AutoSize = true;
-            this.cbWriteDB.Checked = true;
-            this.cbWriteDB.CheckState = System.Windows.Forms.CheckState.Checked;
-            this.cbWriteDB.Font = new System.Drawing.Font("SimSun", 9F, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point, ((byte)(0)));
-            this.cbWriteDB.Location = new System.Drawing.Point(5, 29);
-            this.cbWriteDB.Name = "cbWriteDB";
-            this.cbWriteDB.Size = new System.Drawing.Size(101, 16);
-            this.cbWriteDB.TabIndex = 59;
-            this.cbWriteDB.Text = "Write to DB";
-            this.cbWriteDB.UseVisualStyleBackColor = true;
             // 
             // R2000UartDemo
             // 

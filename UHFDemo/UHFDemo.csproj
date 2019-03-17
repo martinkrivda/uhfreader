@@ -14,7 +14,7 @@
     <FileAlignment>512</FileAlignment>
     <StartupObject>
     </StartupObject>
-    <ApplicationIcon>9239.ico</ApplicationIcon>
+    <ApplicationIcon>mujzavod_logo_small.ico</ApplicationIcon>
     <FileUpgradeFlags>
     </FileUpgradeFlags>
     <OldToolsVersion>3.5</OldToolsVersion>
@@ -172,6 +172,7 @@
   </ItemGroup>
   <ItemGroup>
     <Content Include="9239.ico" />
+    <Content Include="mujzavod_logo_small.ico" />
     <None Include="Resources\mujzavod_logo_small.ico" />
   </ItemGroup>
   <ItemGroup>
