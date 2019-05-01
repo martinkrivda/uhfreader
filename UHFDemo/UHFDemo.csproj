@@ -173,6 +173,8 @@
   <ItemGroup>
     <Content Include="9239.ico" />
     <Content Include="mujzavod_logo_small.ico" />
+    <None Include="Resources\stop-button1.png" />
+    <None Include="Resources\play-button1.png" />
     <None Include="Resources\mujzavod_logo_small.ico" />
   </ItemGroup>
   <ItemGroup>

@@ -36,7 +36,7 @@ namespace UHFDemo
 
             if (string.IsNullOrEmpty(databaseName))
                 return false;
-            var connstring = $"Server=localhost; database={databaseName}; UID=root; password=qLW3uc@admin";
+            var connstring = $"Server=localhost; database={databaseName}; UID=root; password=aQ85@ypQ3";
             Connection = new MySqlConnection(connstring);
             Connection.Open();
 

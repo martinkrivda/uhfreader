@@ -248,9 +248,6 @@ namespace UHFDemo
                 case 0xb0:
                     ProcessInventoryISO18000(msgTran);
                     break;
-                case 0xb1:
-                    ProcessReadTagISO18000(msgTran);
-                    break;
                 case 0xb2:
                     ProcessWriteTagISO18000(msgTran);
                     break;
@@ -435,6 +432,13 @@ namespace UHFDemo
                             nCommandDuation = m_curInventoryBuffer.nDataCount * 1000 / m_curInventoryBuffer.nReadRate;
                             nCaculatedReadRate = m_curInventoryBuffer.nReadRate;
                         }
+
+                            //Store tag to buffer
+                            m_bInventory = true;
+                            m_curInventoryBuffer.bLoopInventory = true;
+                            var btWorkAntenna = m_curInventoryBuffer.lAntenna[m_curInventoryBuffer.nIndexAntenna];
+                        reader.SetWorkAntenna(m_curSetting.btReadId, btWorkAntenna);
+                        m_curSetting.btWorkAntenna = btWorkAntenna;
 
                         //Variable of list
                         var nEpcCount = 0;
@@ -932,87 +936,6 @@ namespace UHFDemo
             }
         }
 
-        private void RefreshISO18000(byte btCmd)
-        {
-            if (InvokeRequired)
-            {
-                var InvokeRefreshISO18000 = new RefreshISO18000Unsafe(RefreshISO18000);
-                Invoke(InvokeRefreshISO18000, btCmd);
-            }
-            else
-            {
-                switch (btCmd)
-                {
-                    case 0xb0:
-                    {
-                        ltvTagISO18000.Items.Clear();
-                        var nLength = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count;
-                        var nIndex = 1;
-                        foreach (DataRow row in m_curOperateTagISO18000Buffer.dtTagTable.Rows)
-                        {
-                            var item = new ListViewItem();
-                            item.Text = nIndex.ToString();
-                            item.SubItems.Add(row[1].ToString());
-                            item.SubItems.Add(row[0].ToString());
-                            item.SubItems.Add(row[2].ToString());
-                            ltvTagISO18000.Items.Add(item);
-
-                            nIndex++;
-                        }
-
-                        //txtTagCountISO18000.Text = m_curOperateTagISO18000Buffer.dtTagTable.Rows.Count.ToString();
-
-                        if (m_bContinue)
-                            reader.InventoryISO18000(m_curSetting.btReadId);
-                        else
-                            WriteLog(lrtxtLog, "Stop", 0);
-                    }
-                        break;
-                    case 0xb1:
-                    {
-                        htxtReadData18000.Text = m_curOperateTagISO18000Buffer.strReadData;
-                    }
-                        break;
-                    case 0xb2:
-                    {
-                        //txtWriteLength.Text = m_curOperateTagISO18000Buffer.btWriteLength.ToString();
-                    }
-                        break;
-                    case 0xb3:
-                    {
-                        //switch(m_curOperateTagISO18000Buffer.btStatus)
-                        //{
-                        //    case 0x00:
-                        //        MessageBox.Show("The byte successfully locked");
-                        //        break;
-                        //    case 0xFE:
-                        //        MessageBox.Show("Status of the byte is locked");
-                        //        break;
-                        //    case 0xFF:
-                        //        MessageBox.Show("The byte can not be locked");
-                        //        break;
-                        //    default:
-                        //        break;
-                        //}
-                    }
-                        break;
-                    case 0xb4:
-                    {
-                        switch (m_curOperateTagISO18000Buffer.btStatus)
-                        {
-                            case 0x00:
-                                txtStatus.Text = "This byte is not locked";
-                                break;
-                            case 0xFE:
-                                txtStatus.Text = "Status of the byte is locked";
-                                break;
-                        }
-                    }
-                        break;
-                }
-            }
-        }
-
         private void RunLoopISO18000(int nLength)
         {
             if (InvokeRequired)
@@ -1026,12 +949,10 @@ namespace UHFDemo
                 if (nLength == m_nBytes)
                 {
                     m_nLoopedTimes++;
-                    txtLoopTimes.Text = m_nLoopedTimes.ToString();
                 }
 
                 //Judge whether cycle is ended.
                 m_nLoopTimes--;
-                if (m_nLoopTimes > 0) WriteTagISO18000();
             }
         }
 
@@ -1102,11 +1023,6 @@ namespace UHFDemo
 
 
             gbCmdOperateTag.Enabled = bIsEnable;
-
-            btnInventoryISO18000.Enabled = bIsEnable;
-            btnClear.Enabled = bIsEnable;
-            gbISO1800ReadWrite.Enabled = bIsEnable;
-            gbISO1800LockQuery.Enabled = bIsEnable;
 
             gbCmdManual.Enabled = bIsEnable;
 
@@ -2680,7 +2596,7 @@ namespace UHFDemo
 
         private void ProcessInventory(MessageTran msgTran)
         {
-            var strCmd = "Inventory";
+            var strCmd = "Start";
             var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 9)
@@ -3424,45 +3340,9 @@ namespace UHFDemo
             }
         }
 
-        private void btnInventoryISO18000_Click(object sender, EventArgs e)
-        {
-            if (m_bContinue)
-            {
-                m_bContinue = false;
-                btnInventoryISO18000.BackColor = Color.WhiteSmoke;
-                btnInventoryISO18000.ForeColor = Color.Indigo;
-                btnInventoryISO18000.Text = "Inventory";
-            }
-            else
-            {
-                //Judge whether EPC inventory is runing.
-                if (m_curInventoryBuffer.bLoopInventory)
-                {
-                    if (MessageBox.Show("EPC C1G2 tag is inventoring, whether to stop?", "Prompt",
-                            MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
-                        DialogResult.Cancel) return;
-
-                    btnInventory_Click(sender, e);
-                    return;
-                }
-
-                m_curOperateTagISO18000Buffer.ClearBuffer();
-                ltvTagISO18000.Items.Clear();
-                m_bContinue = true;
-                btnInventoryISO18000.BackColor = Color.Indigo;
-                btnInventoryISO18000.ForeColor = Color.White;
-                btnInventoryISO18000.Text = "Stop";
-
-                var strCmd = "Inventory";
-                WriteLog(lrtxtLog, strCmd, 0);
-
-                reader.InventoryISO18000(m_curSetting.btReadId);
-            }
-        }
-
         private void ProcessInventoryISO18000(MessageTran msgTran)
         {
-            var strCmd = "Inventory";
+            var strCmd = "Start";
             var strErrorCode = string.Empty;
 
             if (msgTran.AryData.Length == 1)
@@ -3502,9 +3382,7 @@ namespace UHFDemo
             else if (msgTran.AryData.Length == 2)
             {
                 m_curOperateTagISO18000Buffer.nTagCnt = Convert.ToInt32(msgTran.AryData[1]);
-                RefreshISO18000(msgTran.Cmd);
-
-                //WriteLog(lrtxtLog, strCmd, 0);
+                WriteLog(lrtxtLog, strCmd, 0);
             }
             else
             {
@@ -3513,148 +3391,6 @@ namespace UHFDemo
 
                 WriteLog(lrtxtLog, strLog, 1);
             }
-        }
-
-        private void btnReadTagISO18000_Click(object sender, EventArgs e)
-        {
-            if (htxtReadUID.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter UID");
-                return;
-            }
-
-            if (htxtReadStartAdd.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter Start Add");
-                return;
-            }
-
-            if (txtReadLength.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter Length");
-                return;
-            }
-
-            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
-
-            if (reslut == null)
-            {
-                MessageBox.Show("Invalid input characters");
-                return;
-            }
-
-            if (reslut.GetLength(0) < 8)
-            {
-                MessageBox.Show("Enter at least 8 bytes");
-                return;
-            }
-
-            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
-
-            reader.ReadTagISO18000(m_curSetting.btReadId, btAryUID, Convert.ToByte(htxtReadStartAdd.Text, 16),
-                Convert.ToByte(txtReadLength.Text, 16));
-        }
-
-        private void ProcessReadTagISO18000(MessageTran msgTran)
-        {
-            var strCmd = "Read Tag";
-            var strErrorCode = string.Empty;
-
-            if (msgTran.AryData.Length == 1)
-            {
-                strErrorCode = CCommondMethod.FormatErrorCode(msgTran.AryData[0]);
-                var strLog = strCmd + "Failure, failure cause: " + strErrorCode;
-
-                WriteLog(lrtxtLog, strLog, 1);
-            }
-            else
-            {
-                var strAntID = CCommondMethod.ByteArrayToString(msgTran.AryData, 0, 1);
-                var strData = CCommondMethod.ByteArrayToString(msgTran.AryData, 1, msgTran.AryData.Length - 1);
-
-                m_curOperateTagISO18000Buffer.btAntId = Convert.ToByte(strAntID);
-                m_curOperateTagISO18000Buffer.strReadData = strData;
-
-                RefreshISO18000(msgTran.Cmd);
-
-                WriteLog(lrtxtLog, strCmd, 0);
-            }
-        }
-
-        private void btnWriteTagISO18000_Click(object sender, EventArgs e)
-        {
-            try
-            {
-                m_nLoopedTimes = 0;
-                if (txtLoop.Text.Length == 0)
-                    m_nLoopTimes = 0;
-                else
-                    m_nLoopTimes = Convert.ToInt32(txtLoop.Text);
-
-                WriteTagISO18000();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show(ex.Message);
-            }
-        }
-
-        private void WriteTagISO18000()
-        {
-            if (htxtReadUID.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter UID");
-                return;
-            }
-
-            if (htxtWriteStartAdd.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter Start Add");
-                return;
-            }
-
-            if (htxtWriteData18000.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter Data to be written");
-                return;
-            }
-
-            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
-
-            if (reslut == null)
-            {
-                MessageBox.Show("Invalid input characters");
-                return;
-            }
-
-            if (reslut.GetLength(0) < 8)
-            {
-                MessageBox.Show("Enter at least 8 bytes");
-                return;
-            }
-
-            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
-
-            var btStartAdd = Convert.ToByte(htxtWriteStartAdd.Text, 16);
-
-            //string[] reslut = CCommondMethod.StringToStringArray(htxtWriteData18000.Text.ToUpper(), 2);
-            var strTemp = cleanString(htxtWriteData18000.Text);
-            reslut = CCommondMethod.StringToStringArray(strTemp.ToUpper(), 2);
-
-            if (reslut == null)
-            {
-                MessageBox.Show("Invalid input characters");
-                return;
-            }
-
-            var btAryData = CCommondMethod.StringArrayToByteArray(reslut, reslut.Length);
-
-            //byte btLength = Convert.ToByte(txtWriteLength.Text, 16);
-            var btLength = Convert.ToByte(reslut.Length);
-            txtWriteLength.Text = string.Format("{0:X}", btLength);
-            m_nBytes = reslut.Length;
-
-            reader.WriteTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd, btLength, btAryData);
         }
 
         private string cleanString(string newStr)
@@ -3690,46 +3426,6 @@ namespace UHFDemo
                 WriteLog(lrtxtLog, strLog, 0);
                 RunLoopISO18000(Convert.ToInt32(msgTran.AryData[1]));
             }
-        }
-
-        private void btnLockTagISO18000_Click(object sender, EventArgs e)
-        {
-            if (htxtReadUID.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter UID");
-                return;
-            }
-
-            if (htxtLockAdd.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter write-protected Add");
-                return;
-            }
-
-            //Confirm the write protection prompt
-            if (MessageBox.Show("Are you sure to write protect this address permanently?", "Prompt",
-                    MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
-                DialogResult.Cancel) return;
-
-            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
-
-            if (reslut == null)
-            {
-                MessageBox.Show("Invalid input characters");
-                return;
-            }
-
-            if (reslut.GetLength(0) < 8)
-            {
-                MessageBox.Show("Enter at least 8 bytes");
-                return;
-            }
-
-            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
-
-            var btStartAdd = Convert.ToByte(htxtLockAdd.Text, 16);
-
-            reader.LockTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd);
         }
 
         private void ProcessLockTagISO18000(MessageTran msgTran)
@@ -3771,41 +3467,6 @@ namespace UHFDemo
             }
         }
 
-        private void btnQueryTagISO18000_Click(object sender, EventArgs e)
-        {
-            if (htxtReadUID.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter UID");
-                return;
-            }
-
-            if (htxtQueryAdd.Text.Length == 0)
-            {
-                MessageBox.Show("Please enter the query address");
-                return;
-            }
-
-            var reslut = CCommondMethod.StringToStringArray(htxtReadUID.Text.ToUpper(), 2);
-
-            if (reslut == null)
-            {
-                MessageBox.Show("Invalid input characters");
-                return;
-            }
-
-            if (reslut.GetLength(0) < 8)
-            {
-                MessageBox.Show("Enter at least 8 bytes");
-                return;
-            }
-
-            var btAryUID = CCommondMethod.StringArrayToByteArray(reslut, 8);
-
-            var btStartAdd = Convert.ToByte(htxtQueryAdd.Text, 16);
-
-            reader.QueryTagISO18000(m_curSetting.btReadId, btAryUID, btStartAdd);
-        }
-
         private void ProcessQueryISO18000(MessageTran msgTran)
         {
             var strCmd = "Query Tag";
@@ -3825,8 +3486,6 @@ namespace UHFDemo
 
                 m_curOperateTagISO18000Buffer.btAntId = msgTran.AryData[0];
                 m_curOperateTagISO18000Buffer.btStatus = msgTran.AryData[1];
-
-                RefreshISO18000(msgTran.Cmd);
 
                 WriteLog(lrtxtLog, strCmd, 0);
             }
@@ -3986,32 +3645,6 @@ namespace UHFDemo
             //}
         }
 
-        private void btnClear_Click(object sender, EventArgs e)
-        {
-            htxtReadUID.Text = "";
-            htxtReadStartAdd.Text = "";
-            txtReadLength.Text = "";
-            htxtReadData18000.Text = "";
-            htxtWriteStartAdd.Text = "";
-            txtWriteLength.Text = "";
-            htxtWriteData18000.Text = "";
-            htxtLockAdd.Text = "";
-            htxtQueryAdd.Text = "";
-            txtStatus.Text = "";
-            txtLoop.Text = "1";
-            ltvTagISO18000.Items.Clear();
-        }
-
-        private void ltvTagISO18000_Click(object sender, EventArgs e)
-        {
-            if (ltvTagISO18000.SelectedItems.Count == 1)
-            {
-                var item = ltvTagISO18000.SelectedItems[0];
-                var strUID = item.SubItems[1].Text;
-                htxtReadUID.Text = strUID;
-            }
-        }
-
         private void ckDisplayLog_CheckedChanged(object sender, EventArgs e)
         {
             if (ckDisplayLog.Checked)
@@ -4077,7 +3710,8 @@ namespace UHFDemo
                     m_curInventoryBuffer.bLoopInventory = false;
                     btRealTimeInventory.BackColor = Color.WhiteSmoke;
                     btRealTimeInventory.ForeColor = Color.DarkBlue;
-                    btRealTimeInventory.Text = "Inventory";
+                    btRealTimeInventory.Text = "Start";
+                    btRealTimeInventory.Image = UHFDemo.Properties.Resources.play_button1;
                     timerInventory.Enabled = false;
                     cbWriteDB.Enabled = true;
                     numericUpDown1.Enabled = true;
@@ -4090,8 +3724,6 @@ namespace UHFDemo
                     if (MessageBox.Show("ISO 18000-6B tag is inventoring, whether to stop?", "Prompt",
                             MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
                         DialogResult.Cancel) return;
-
-                    btnInventoryISO18000_Click(sender, e);
                     return;
                 }
 
@@ -4099,6 +3731,7 @@ namespace UHFDemo
                 m_curInventoryBuffer.bLoopInventory = true;
                 btRealTimeInventory.BackColor = Color.DarkBlue;
                 btRealTimeInventory.ForeColor = Color.White;
+                btRealTimeInventory.Image = UHFDemo.Properties.Resources.stop_button1;
                 btRealTimeInventory.Text = "Stop";
 
                 m_curInventoryBuffer.bLoopInventoryReal = true;
@@ -4176,7 +3809,7 @@ namespace UHFDemo
                     m_curInventoryBuffer.bLoopInventory = false;
                     btBufferInventory.BackColor = Color.WhiteSmoke;
                     btBufferInventory.ForeColor = Color.DarkBlue;
-                    btBufferInventory.Text = "Inventory";
+                    btBufferInventory.Text = "Start3";
 
                     return;
                 }
@@ -4188,7 +3821,6 @@ namespace UHFDemo
                             MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
                         DialogResult.Cancel) return;
 
-                    btnInventoryISO18000_Click(sender, e);
                     return;
                 }
 
@@ -4271,7 +3903,7 @@ namespace UHFDemo
                 m_curInventoryBuffer.bLoopInventory = false;
                 btFastInventory.BackColor = Color.WhiteSmoke;
                 btFastInventory.ForeColor = Color.DarkBlue;
-                btFastInventory.Text = "Inventory";
+                btFastInventory.Text = "Start4";
                 return;
             }
 
@@ -4282,7 +3914,6 @@ namespace UHFDemo
                         MessageBoxButtons.OKCancel, MessageBoxIcon.Question, MessageBoxDefaultButton.Button2) ==
                     DialogResult.Cancel) return;
 
-                btnInventoryISO18000_Click(sender, e);
                 return;
             }
 
@@ -4362,7 +3993,7 @@ namespace UHFDemo
                     m_curInventoryBuffer.bLoopInventory = false;
                     btFastInventory.BackColor = Color.WhiteSmoke;
                     btFastInventory.ForeColor = Color.DarkBlue;
-                    btFastInventory.Text = "Inventory";
+                    btFastInventory.Text = "Start1";
                     return;
                 }
 
